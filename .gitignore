@@ -36,6 +36,9 @@ out/
 coverage/
 .nyc_output/
 .turbo/
+playwright-report/
+test-results/
+.cache/
 *.tsbuildinfo
 
 # Runtime data
@@ -46,6 +49,7 @@ coverage/
 *.pid
 *.seed
 *.log
+pnpm-debug.log*
 logs/
 tmp/
 temp/
