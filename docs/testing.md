@@ -24,11 +24,11 @@ This is the single supported full validation command locally and in CI. It exits
 | Licenses           | `pnpm check:licenses`   | Reviewed production SPDX identifiers                             |
 | Dependencies       | `pnpm audit:prod`       | High-severity production audit                                   |
 
-Global unit coverage thresholds are 80% for statements, branches, functions, and lines. Authentication, authorization, credential, planning, retention, and other security-critical modules must use higher focused thresholds as their implementation grows. Adequacy is reviewed from the actual line and branch report, not inferred from a passing percentage.
+Global unit coverage thresholds are 80% for statements, branches, functions, and lines. Database repositories and migrations are excluded from the unit denominator because the PostgreSQL integration suite executes their real transactional behavior. Thin Next.js route/page/runtime adapters are validated through the production build and browser suite. Authentication, credential, and request-security services remain in unit coverage; adequacy is reviewed from the actual line and branch report, not inferred from a passing percentage.
 
 ## Test database safety
 
-Full validation starts `postgres-test` under the Compose project `opsweave-validation`, binds it only to loopback port `55432`, and removes its temporary storage on completion. Migration tests reject any URL that is not loopback, port `55432`, and database `opsweave_test`.
+Full validation starts `postgres-test` under the Compose project `opsweave-validation`, binds it only to loopback port `55432`, and removes its temporary storage on completion. Migration and browser setup reject any URL that is not loopback, port `55432`, and database `opsweave_test`.
 
 Set `OPSWAVE_KEEP_TEST_DATABASE=true` to retain the container for debugging. Set `OPSWAVE_SKIP_TEST_DATABASE_START=true` only when an equivalent isolated database is already running.
 
@@ -41,6 +41,8 @@ pnpm exec playwright install --with-deps chromium
 ```
 
 Local developers may set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to a compatible existing binary. CI uses Playwright's pinned browser runtime.
+
+Browser setup resets only the guarded isolated test database, applies migrations, and bootstraps a synthetic owner. Tests cover anonymous redirects, authentication, every Phase 1 settings section, credential response redaction, password rotation, logout/re-login, and axe scans.
 
 ## External services
 

@@ -1,5 +1,5 @@
-import { createWorkerLogger } from "./logger.js";
-import { getWorkerStatus } from "./status.js";
+import { createWorkerLogger } from "./logger.ts";
+import { getWorkerStatus } from "./status.ts";
 
 const logger = createWorkerLogger();
 

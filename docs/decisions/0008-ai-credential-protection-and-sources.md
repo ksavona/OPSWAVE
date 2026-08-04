@@ -38,7 +38,8 @@ Self-hosted operators may inject provider credentials through deployment secrets
 ## Validation
 
 - Phase 0 tests round-trip, plaintext absence, invalid configuration, metadata mismatch, wrong-key failure, and safe errors.
-- Phase 1 must add persistence, rotation, source-precedence, audit-redaction, browser-response, backup, and replace/remove tests.
+- Phase 1 tests add ciphertext persistence, source precedence, wrong/lost-key failure, audit redaction, browser-response plaintext absence, and add/replace/remove behavior.
+- Multi-version key rotation and exercised backup/restore remain deployment work; current envelopes record a positive key version and fail closed when it cannot be used.
 
 ## References
 

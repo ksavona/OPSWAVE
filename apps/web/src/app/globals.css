@@ -6,6 +6,9 @@
   --surface: #ffffff;
   --border: #ccd5cf;
   --accent: #17684a;
+  --accent-dark: #0d4d35;
+  --danger: #a52828;
+  --focus: #075fcc;
 }
 
 * {
@@ -38,6 +41,88 @@ main {
   padding: 5rem 0;
 }
 
+a {
+  color: var(--accent-dark);
+  font-weight: 700;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  min-height: 2.75rem;
+  padding: 0.7rem 1rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.6rem;
+  color: white;
+  background: var(--accent);
+  font-weight: 750;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--accent-dark);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+button.secondary {
+  color: var(--foreground);
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+button.secondary:hover {
+  background: #e8ece9;
+}
+
+button.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+button.compact {
+  min-height: 2.4rem;
+  padding: 0.45rem 0.7rem;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+label {
+  display: grid;
+  gap: 0.45rem;
+  color: var(--foreground);
+  font-weight: 700;
+}
+
+input,
+select {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  color: var(--foreground);
+  background: var(--surface);
+}
+
+input[type="checkbox"] {
+  width: 1.2rem;
+  min-height: 1.2rem;
+}
+
 .eyebrow {
   margin: 0 0 1rem;
   color: var(--accent);
@@ -53,6 +138,13 @@ h1 {
   font-size: clamp(2.75rem, 8vw, 6rem);
   letter-spacing: -0.055em;
   line-height: 0.95;
+}
+
+.app-header h1,
+.auth-card h1 {
+  max-width: none;
+  font-size: clamp(2rem, 5vw, 4rem);
+  line-height: 1;
 }
 
 .lede {
@@ -95,6 +187,157 @@ h1 {
   font-weight: 700;
 }
 
+.auth-page {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 2rem 0;
+}
+
+.auth-card {
+  width: min(32rem, 100%);
+  padding: clamp(1.5rem, 5vw, 3rem);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+  box-shadow: 0 1rem 3rem rgba(23, 34, 28, 0.08);
+}
+
+.auth-form,
+.settings-panel form {
+  display: grid;
+  gap: 1rem;
+}
+
+.password-field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+}
+
+.form-message {
+  min-height: 1.5rem;
+  margin: 0.75rem 0;
+  color: var(--muted);
+}
+
+.form-message.error {
+  color: var(--danger);
+}
+
+.app-page {
+  padding-top: 2rem;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-header nav,
+.button-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.owner-label {
+  margin: 0;
+  color: var(--muted);
+}
+
+.hero-panel {
+  padding: 4rem 0;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: minmax(12rem, 15rem) minmax(0, 1fr);
+  gap: 2rem;
+  padding: 2rem 0;
+}
+
+.settings-nav {
+  display: grid;
+  align-content: start;
+  gap: 0.5rem;
+}
+
+.settings-nav button {
+  justify-content: start;
+  text-align: left;
+}
+
+.settings-nav button.active {
+  box-shadow: inset 4px 0 rgba(255, 255, 255, 0.7);
+}
+
+.settings-panel {
+  min-width: 0;
+  padding: clamp(1.25rem, 4vw, 2.5rem);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+}
+
+.settings-panel h2 {
+  margin-top: 0;
+  font-size: 2rem;
+}
+
+.weekday-grid {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.weekday-row {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1fr) minmax(7rem, 10rem);
+  align-items: center;
+  gap: 1rem;
+}
+
+.weekday-row label,
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  text-transform: capitalize;
+}
+
+.capacity-summary,
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.75rem;
+  margin: 1.25rem 0;
+}
+
+.capacity-summary span {
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+
+.security-summary {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.5rem 1rem;
+}
+
+.security-summary dt {
+  font-weight: 750;
+}
+
+.security-summary dd {
+  margin: 0;
+}
+
 @media (max-width: 44rem) {
   main {
     padding: 3rem 0;
@@ -111,5 +354,15 @@ h1 {
 
   .status-item:last-child {
     border-bottom: 0;
+  }
+
+  .app-header,
+  .settings-layout {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .settings-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

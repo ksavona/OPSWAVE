@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 0 contains no user data and does not provide production backup automation. These rules constrain the Phase 1 and deployment implementations.
+Phase 1 persists owner, session, settings, encrypted credential, and audit records but does not provide production backup automation. These rules constrain deployments and later release work.
 
 ## Backup set
 
@@ -33,4 +33,10 @@ Before a production release, a restore runbook must verify:
 
 ## Owner credential recovery
 
-Phase 1 will implement a deliberate local command that replaces the single owner's credential and revokes existing sessions. It must require host access, avoid a remote HTTP backdoor, preserve operational data, and write a redacted security event.
+Run the deliberate host-only recovery command:
+
+```bash
+pnpm owner:recover
+```
+
+The command securely prompts for the existing normalized username and replacement password, atomically changes the credential, increments its version, revokes every session, preserves workspace/operational data, and writes redacted audit metadata. There is no remote recovery endpoint. Back up the database before recovery when operational procedures require it; never place the replacement password in shell history.

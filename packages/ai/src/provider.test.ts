@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DeterministicFakeAiProvider } from "./provider.js";
+import { DeterministicFakeAiProvider } from "./provider.ts";
 
 describe("DeterministicFakeAiProvider", () => {
   it("returns stable output without external access", async () => {

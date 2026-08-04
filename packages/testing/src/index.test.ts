@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createSyntheticIntakeFixture } from "./index.js";
+import { createSyntheticIntakeFixture } from "./index.ts";
 
 describe("createSyntheticIntakeFixture", () => {
   it("is deterministic and supports explicit overrides", () => {

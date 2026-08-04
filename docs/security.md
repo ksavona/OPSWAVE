@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 0 establishes security decisions, safe primitives, and validation. It does not implement application authentication, authorization, credential persistence, or live AI access. No production-readiness claim is made.
+Phase 1 implements single-owner authentication, server-side authorization checks, credential persistence, rate limiting, and security settings. Live AI access and supported production deployment remain absent. No production-readiness claim is made.
 
 ## Protected assets
 
@@ -30,16 +30,16 @@ Phase 0 establishes security decisions, safe primitives, and validation. It does
 - AI credentials use AES-256-GCM authenticated encryption with a random 96-bit nonce and version-bound associated data.
 - The AI master key stays outside the database and version control.
 - Logs redact known credential fields; tests verify synthetic secrets remain absent.
-- Session tokens will be random opaque values stored as server-side digests.
+- Session tokens are random opaque values stored only as server-side SHA-256 digests.
 
 ### Authentication abuse
 
-- Initial setup will be a one-time local bootstrap with no default credentials.
-- Login responses will not reveal whether a username exists.
-- Rate limiting will combine account and network signals without permanently locking out the only owner.
-- Password change and local recovery will rotate credentials and revoke sessions.
-
-These controls are architectural decisions only until Phase 1 implements and tests them.
+- Initial setup is a one-time local bootstrap with no default credentials or HTTP setup route.
+- Login responses do not reveal whether a username exists.
+- PostgreSQL-backed rate limiting combines HMAC-reduced account and network signals without permanent lockout.
+- Password change and local recovery rotate credentials and revoke sessions.
+- Protected endpoints perform authoritative database session checks; proxy redirects are only an optimistic convenience.
+- State-changing routes reject missing, malformed, or cross-origin `Origin` values.
 
 ### Prompt injection and unsafe AI output
 
@@ -74,7 +74,7 @@ These controls are architectural decisions only until Phase 1 implements and tes
 - Login and provider-test endpoints require rate limits.
 - Worker concurrency, retries, and catch-up windows remain bounded.
 
-## Implemented Phase 0 controls
+## Implemented controls
 
 - Strict secret and environment ignore rules.
 - High-confidence public-file secret scan.
@@ -84,7 +84,11 @@ These controls are architectural decisions only until Phase 1 implements and tes
 - Exact dependencies, frozen lockfile, release-age policy, reviewed production licenses, and audit gate.
 - Pinned CI actions and least-privilege workflow permissions.
 - Synthetic-only tests and no required live provider access.
+- Twelve-hour idle and seven-day absolute sessions with throttled activity writes and immediate revocation.
+- Optimistic settings versions, parameterized repository queries, database range/uniqueness constraints, and workspace scope.
+- Environment-managed credential precedence and read-only presentation; settings-managed ciphertext never hydrates browser state.
+- Bounded request bodies, generic safe errors, durable login attempt events, and fail-closed sensitive-action limits.
 
 ## Residual risk
 
-The web foundation is intentionally unauthenticated because it serves no application data. Adding any owner or operational data before Phase 1 authentication and authorization are complete is prohibited.
+The implementation remains single-owner and has not had an independent security assessment. A compromised host, application process, database role plus master key, or trusted reverse proxy can defeat important controls. Proxy trust, TLS, least-privilege database roles, retention, key rotation, backup restore, and production hardening remain operator/deployment responsibilities or later-phase work.

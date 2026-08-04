@@ -28,6 +28,7 @@ Start the development database and apply migrations:
 ```bash
 docker compose up --detach --wait postgres
 pnpm db:migrate
+pnpm owner:bootstrap
 ```
 
 Start the web process:
@@ -43,6 +44,8 @@ pnpm dev:worker
 ```
 
 It must not be described as processing jobs until job handlers and durable queueing are implemented and tested.
+
+`pnpm owner:bootstrap` securely prompts for the only owner and refuses replay. It is deliberately local-only: there is no registration or setup route. Use `pnpm owner:recover` from the host if the owner password is lost; recovery preserves workspace data and revokes every session.
 
 ## Database changes
 

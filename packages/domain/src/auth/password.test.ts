@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { MAX_PASSWORD_BYTES, hashPassword, verifyPassword } from "./password.js";
+import { MAX_PASSWORD_BYTES, hashPassword, verifyPassword } from "./password.ts";
 
 const TEST_PARAMETERS = Object.freeze({
   memoryCost: 1_024,

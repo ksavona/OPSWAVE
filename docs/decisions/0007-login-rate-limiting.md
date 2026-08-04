@@ -34,7 +34,9 @@ Login, password change, recovery, and provider verification invite brute force a
 
 ## Validation
 
-Phase 1 must test existing/nonexistent usernames, account/network interactions, retry timing, concurrent attempts, cleanup, proxy parsing, store failure, fallback bounds, and successful owner recovery.
+- Service tests cover existing/nonexistent usernames, generic errors, bounded retry metadata, and sensitive-action failure.
+- Request-security tests cover explicit proxy trust and invalid forwarding signals.
+- PostgreSQL migration tests validate the durable counter/event schema; browser tests exercise failed and successful login plus recovery through password rotation.
 
 ## References
 

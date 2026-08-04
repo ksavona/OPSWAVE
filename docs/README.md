@@ -7,6 +7,8 @@ This directory contains durable public documentation for OpsWeave. Documents des
 - [Architecture overview](architecture/overview.md)
 - [Development guide](development.md)
 - [Environment configuration](environment.md)
+- [Authentication and owner access](authentication.md)
+- [Settings](settings.md)
 - [Testing and validation](testing.md)
 - [Security and threat model](security.md)
 - [Deployment assumptions](deployment.md)
