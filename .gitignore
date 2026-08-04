@@ -1,0 +1,60 @@
+# Local agent instructions and private planning material
+/AGENT.md
+/AGENTS.md
+/agent.md
+/agents.md
+/Notes.md
+/notes.md
+/Implementation/
+/Implementations/
+/implementation/
+/implementations/
+
+# Environment variables and credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+
+# Dependencies and package-manager state
+node_modules/
+.pnpm-store/
+.yarn/
+
+# Build, test, and generated output
+.next/
+.nuxt/
+.svelte-kit/
+dist/
+build/
+out/
+coverage/
+.nyc_output/
+.turbo/
+*.tsbuildinfo
+
+# Runtime data
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.pid
+*.seed
+*.log
+logs/
+tmp/
+temp/
+
+# Editor and operating-system state
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

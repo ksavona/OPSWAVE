@@ -1,0 +1,35 @@
+name: Documentation improvement
+description: Report missing, inaccurate, or unclear public documentation.
+title: "[Docs]: "
+labels:
+  - documentation
+  - triage
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Documentation location
+      description: Link the page or provide the repository path and heading.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is missing, inaccurate, outdated, or difficult to understand?
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: Suggested change
+      description: Describe the information or example that would resolve the problem.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Content safety
+      options:
+        - label: Any example data is synthetic and contains no credentials or identifying production information.
+          required: true
