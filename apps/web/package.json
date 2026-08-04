@@ -1,0 +1,19 @@
+{
+  "name": "@opsweave/web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "OpsWeave web application foundation.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev",
+    "start": "next start --hostname 127.0.0.1 --port 3000",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "next": "16.3.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  }
+}

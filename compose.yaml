@@ -1,0 +1,39 @@
+name: opsweave
+
+x-postgres-image: &postgres-image postgres:18.4-alpine3.24@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+x-postgres-healthcheck: &postgres-healthcheck
+  test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+  interval: 2s
+  timeout: 5s
+  retries: 15
+  start_period: 5s
+
+services:
+  postgres:
+    image: *postgres-image
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-opsweave}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-opsweave-local-only}
+      POSTGRES_USER: ${POSTGRES_USER:-opsweave}
+    healthcheck: *postgres-healthcheck
+    ports:
+      - "127.0.0.1:5432:5432"
+    restart: unless-stopped
+    volumes:
+      - opsweave-postgres:/var/lib/postgresql
+
+  postgres-test:
+    profiles: ["test"]
+    image: *postgres-image
+    environment:
+      POSTGRES_DB: opsweave_test
+      POSTGRES_PASSWORD: opsweave-test-only
+      POSTGRES_USER: opsweave
+    healthcheck: *postgres-healthcheck
+    ports:
+      - "127.0.0.1:55432:5432"
+    tmpfs:
+      - /var/lib/postgresql
+
+volumes:
+  opsweave-postgres:

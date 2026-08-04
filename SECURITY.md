@@ -1,14 +1,14 @@
 # Security Policy
 
-OpsWeave is currently in pre-implementation planning and has no released application. Security reports concerning repository content, future releases, build tooling, or accidental data exposure are still welcome.
+OpsWeave currently provides a Phase 0 engineering foundation and has no released application. Security reports concerning repository content, foundation code, build tooling, dependencies, or accidental data exposure are welcome.
 
 ## Supported versions
 
 There are no supported application versions yet.
 
-| Version | Supported |
-|---|---|
-| Unreleased planning repository | Best-effort review |
+| Version                       | Supported          |
+| ----------------------------- | ------------------ |
+| Unreleased Phase 0 foundation | Best-effort review |
 
 This table will be updated when the first release is published.
 
@@ -34,4 +34,4 @@ Please allow reasonable time to investigate and remediate before public disclosu
 
 ## Security posture
 
-No security or production-readiness claim is made for the planned application. Security controls will be documented and validated alongside implementation, including authentication, authorization, secret handling, input validation, logging redaction, AI-output validation, dependency management, and data retention.
+No security or production-readiness claim is made. Phase 0 includes password-hashing and credential-encryption wrappers, structured redaction, dependency controls, and automated checks; authentication, authorization, credential persistence, AI-output validation, and operational data handling remain unimplemented. See [docs/security.md](docs/security.md).
