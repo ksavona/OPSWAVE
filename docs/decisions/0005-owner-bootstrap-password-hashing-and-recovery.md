@@ -35,7 +35,8 @@ The application has one owner, no email service, and no safe reason to expose re
 ## Validation
 
 - Unit tests verify Argon2id, matching/non-matching passwords, malformed hashes, and input bounds.
-- Phase 1 must test single-use bootstrap, recovery, audit, and session revocation transactionally.
+- PostgreSQL integration tests verify single-use bootstrap, recovery, audit metadata, operational-data preservation, and session revocation transactionally.
+- Browser tests verify password change, cookie rotation, logout, and login with the replacement credential.
 
 ## References
 

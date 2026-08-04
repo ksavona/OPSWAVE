@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 
 const repositoryFiles = execFileSync(
   "git",
@@ -14,7 +14,7 @@ const maximumFileSize = 1_000_000;
 const findings = [];
 
 const highConfidencePatterns = [
-  ["OpenAI API key", new RegExp(["sk", "(?:proj-)?", "[A-Za-z0-9_-]{20,}"].join("-?"), "gu")],
+  ["OpenAI API key", /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}/gu],
   ["GitHub token", new RegExp(["gh", "[pousr]", "_[A-Za-z0-9]{20,}"].join(""), "gu")],
   ["AWS access key", new RegExp(["AKIA", "[A-Z0-9]{16}"].join(""), "gu")],
   [
@@ -24,7 +24,8 @@ const highConfidencePatterns = [
 ];
 
 for (const path of repositoryFiles) {
-  if (excludedFiles.has(path) || statSync(path).size > maximumFileSize) {
+  // `git ls-files --cached` also lists tracked paths deleted in the worktree.
+  if (!existsSync(path) || excludedFiles.has(path) || statSync(path).size > maximumFileSize) {
     continue;
   }
 

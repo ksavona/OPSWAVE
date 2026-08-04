@@ -2,7 +2,7 @@
 
 ## Status
 
-No supported production deployment exists in Phase 0. This document records constraints for future deployment work and the environment used for local validation.
+No supported production deployment exists in Phase 1. This document records constraints for future deployment work and the environment used for local validation.
 
 ## Planned topology
 
@@ -10,7 +10,7 @@ No supported production deployment exists in Phase 0. This document records cons
 - One continuously running Node.js worker process.
 - One PostgreSQL 18 database.
 - One external TLS reverse proxy or managed ingress.
-- One deployment secret store for database credentials, session secrets, and the AI credential master key.
+- One deployment secret store for database credentials, the rate-limit pepper, and the AI credential master key.
 
 The processes form a modular monolith and may share a release artifact, but web and worker lifecycles remain independent.
 

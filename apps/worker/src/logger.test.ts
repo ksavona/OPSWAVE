@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createWorkerLogger } from "./logger.js";
+import { createWorkerLogger } from "./logger.ts";
 
 describe("createWorkerLogger", () => {
   it("redacts known credential fields", () => {

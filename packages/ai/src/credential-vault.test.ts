@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import { AesGcmCredentialVault, CredentialVaultError } from "./credential-vault.js";
+import { AesGcmCredentialVault, CredentialVaultError } from "./credential-vault.ts";
 
 describe("AesGcmCredentialVault", () => {
   it("round-trips a synthetic credential without placing plaintext in the envelope", () => {

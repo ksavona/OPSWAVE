@@ -66,4 +66,11 @@ export default defineConfig(
       },
     },
   },
+  {
+    files: ["**/*.test.{ts,tsx}", "**/*.integration.test.ts"],
+    rules: {
+      "@typescript-eslint/require-await": "off",
+      "security/detect-possible-timing-attacks": "off",
+    },
+  },
 );

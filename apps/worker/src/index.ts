@@ -1,2 +1,2 @@
-export { createWorkerLogger } from "./logger.js";
-export { getWorkerStatus, type WorkerStatus } from "./status.js";
+export { createWorkerLogger } from "./logger.ts";
+export { getWorkerStatus, type WorkerStatus } from "./status.ts";

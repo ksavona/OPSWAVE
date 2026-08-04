@@ -35,7 +35,9 @@ A single-owner application needs revocable sessions, password-change invalidatio
 
 ## Validation
 
-Phase 1 must cover creation, fixation prevention, rotation, idle/absolute expiry, logout, password change, recovery, concurrent revocation, CSRF/origin rejection, and production cookie attributes.
+- Domain/service tests cover opaque creation, digest lookup, idle/absolute expiry, activity throttling, rotation, revocation, and generic authentication failures.
+- Route and browser tests cover origin rejection, protected access, logout, password change, and cookie rotation.
+- PostgreSQL integration tests cover persisted session digests and transactional revocation.
 
 ## References
 

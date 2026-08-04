@@ -1,6 +1,6 @@
 # Security Policy
 
-OpsWeave currently provides a Phase 0 engineering foundation and has no released application. Security reports concerning repository content, foundation code, build tooling, dependencies, or accidental data exposure are welcome.
+OpsWeave currently provides an unreleased Phase 1 single-owner foundation. Security reports concerning authentication, settings, credential protection, repository content, build tooling, dependencies, or accidental data exposure are welcome.
 
 ## Supported versions
 
@@ -8,7 +8,7 @@ There are no supported application versions yet.
 
 | Version                       | Supported          |
 | ----------------------------- | ------------------ |
-| Unreleased Phase 0 foundation | Best-effort review |
+| Unreleased Phase 1 foundation | Best-effort review |
 
 This table will be updated when the first release is published.
 
@@ -34,4 +34,4 @@ Please allow reasonable time to investigate and remediate before public disclosu
 
 ## Security posture
 
-No security or production-readiness claim is made. Phase 0 includes password-hashing and credential-encryption wrappers, structured redaction, dependency controls, and automated checks; authentication, authorization, credential persistence, AI-output validation, and operational data handling remain unimplemented. See [docs/security.md](docs/security.md).
+No security or production-readiness claim is made. Phase 1 includes local-only owner bootstrap/recovery, server-side sessions, same-origin mutations, durable rate limits, protected settings, encrypted credential persistence, structured redaction, dependency controls, and automated checks. Live AI, production hardening, key rotation, retention jobs, and operational workflows remain unimplemented. See [docs/security.md](docs/security.md).

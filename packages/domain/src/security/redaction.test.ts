@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { REDACTED_VALUE, redactSensitiveValues } from "./redaction.js";
+import { REDACTED_VALUE, redactSensitiveValues } from "./redaction.ts";
 
 describe("redactSensitiveValues", () => {
   it("redacts nested sensitive fields while preserving safe context", () => {

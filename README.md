@@ -6,16 +6,17 @@
 OpsWeave is an early-stage personal operations workspace intended to turn unstructured work into structured, reviewable projects and tasks. The project is a public example of disciplined AI engineering, operational design, governance, testing, and maintainable software delivery.
 
 > [!IMPORTANT]
-> Phase 0 provides an engineering foundation, not a usable operations product. Authentication, project and task management, AI intake, planning, automation, reporting, and deployment are not implemented.
+> Phase 1 provides a private single-owner shell and settings foundation, not a complete operations product. Project/task workflows, AI intake, planning, automation, reporting, and supported production deployment are not implemented.
 
 ## What exists
 
 - A pinned Node.js and pnpm TypeScript monorepo.
-- A minimal Next.js web application and non-sensitive health endpoint.
+- A private Next.js owner shell with server-side sessions and a non-sensitive health endpoint.
 - A background-worker scaffold with structured, redacted logging and no registered jobs.
-- A PostgreSQL 18.4 container and a generated Drizzle migration.
-- Argon2id password hashing and authenticated AI-credential encryption wrappers.
-- A replaceable AI-provider interface with a deterministic fake provider.
+- A PostgreSQL 18.4 schema with owner, session, settings, encrypted credential, audit, and future workflow foundations.
+- Local-only owner bootstrap/recovery, Argon2id password hashing, revocable opaque sessions, and durable rate limits.
+- General, working-time, fake-provider credential, prioritisation, and security settings.
+- AES-256-GCM credential persistence and a deterministic fake verification provider; no live provider adapter.
 - Unit, component, route, migration, browser, accessibility, secret-leak, license, build, and dependency-audit checks.
 - One full validation command shared by local development and CI.
 
@@ -24,7 +25,7 @@ Live AI access is disabled by default and is not required by development, tests,
 ## Architecture
 
 ```text
-apps/web       Web and future protected server boundary (foundation route only)
+apps/web       Private owner UI and protected server boundary
 apps/worker    Durable background-work boundary (no live jobs yet)
 packages/ai    Provider and encrypted-credential boundaries
 packages/db    PostgreSQL schema, migrations, and connection factory
@@ -52,12 +53,13 @@ pnpm install --frozen-lockfile
 pnpm exec playwright install --with-deps chromium
 docker compose up --detach --wait postgres
 pnpm db:migrate
+pnpm owner:bootstrap
 pnpm dev
 ```
 
 Before starting PostgreSQL, replace the example database password in `.env` and update `DATABASE_URL` to match. Generate an AI credential master key only when credential storage is exercised. A live `OPENAI_API_KEY` is optional and must remain in the ignored `.env` file or the deployment secret store.
 
-The foundation page is available at `http://localhost:3000`; the health endpoint is `/health`.
+The sign-in page is available at `http://localhost:3000/login`; the health endpoint is `/health`. Bootstrap runs once and has no HTTP equivalent. See [authentication and owner access](docs/authentication.md).
 
 ## Full validation
 
@@ -83,6 +85,8 @@ The HTML coverage report is written to `coverage/index.html`. See [testing and v
 - [Architecture overview](docs/architecture/overview.md)
 - [Development guide](docs/development.md)
 - [Environment configuration](docs/environment.md)
+- [Authentication and owner access](docs/authentication.md)
+- [Settings](docs/settings.md)
 - [Security and threat model](docs/security.md)
 - [Testing and validation](docs/testing.md)
 - [Deployment assumptions](docs/deployment.md)

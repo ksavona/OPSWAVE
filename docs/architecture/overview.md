@@ -2,7 +2,7 @@
 
 ## Status
 
-OpsWeave is a Phase 0 modular-monolith foundation. The web page, health route, worker entry point, migration tooling, security primitives, and automated checks are implemented. Product workflows are not.
+OpsWeave is a Phase 1 modular monolith. Single-owner authentication, protected settings, encrypted fake-provider credential persistence, audit foundations, migration tooling, and automated checks are implemented. Project/task and planning workflows are not.
 
 ## Modules
 
@@ -29,15 +29,12 @@ A TLS-terminating reverse proxy is outside the repository foundation. The web an
 
 ## Current data flow
 
-Phase 0 exposes only:
-
-1. `GET /` renders a truthful foundation status page.
-2. `GET /health` returns bounded service name, version, and health status.
-3. The worker writes one structured startup record and exits; no jobs or schedules are registered.
-4. Migration tooling creates the `opsweave.system_metadata` foundation table.
-5. Unit tests exercise password hashing, credential encryption, redaction, and fake-provider behavior using synthetic values.
-
-No user data, AI request, authentication state, or task record is accepted or persisted.
+1. A local CLI creates exactly one owner and initial workspace; a separate host-only recovery CLI replaces the password without deleting operational data.
+2. Login verifies Argon2id credentials, applies durable privacy-reduced rate limits, and returns an opaque cookie while PostgreSQL stores only its digest.
+3. Every protected page and endpoint validates the database session. Mutations also validate origin and optimistic settings versions.
+4. Settings persist general preferences, seven working-day rows, prioritisation policy, and an optional AES-256-GCM credential envelope.
+5. Provider verification uses only a deterministic fake. The browser receives status, never credential plaintext.
+6. Security and settings changes write redacted audit metadata. The worker still has no registered jobs.
 
 ## Trust boundaries
 
@@ -64,4 +61,4 @@ packages/* must not depend on apps/*
 
 ## Unimplemented boundaries
 
-Authentication, sessions, workspace scope, project/task data, queues, schedules, live providers, authorization, audit history, retention, backups, and production containers remain planned. Their ADRs constrain future work but do not imply implementation.
+Project/task behavior, delegated access, queues, schedules, live providers, audit browsing, retention jobs, exercised backups, and production containers remain planned. Schema foundations for some later concepts do not imply usable product behavior.

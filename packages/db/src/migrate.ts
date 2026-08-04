@@ -3,7 +3,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 
-import { createDatabasePool } from "./client.js";
+import { createDatabasePool } from "./client.ts";
 
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 

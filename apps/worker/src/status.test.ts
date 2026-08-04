@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getWorkerStatus } from "./status.js";
+import { getWorkerStatus } from "./status.ts";
 
 describe("getWorkerStatus", () => {
   it("makes the non-operational foundation state explicit", () => {
