@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   check,
+  date,
   index,
   integer,
   jsonb,
@@ -274,6 +275,28 @@ export const delegates = opsweaveSchema.table(
   (table) => [index("delegates_workspace_idx").on(table.workspaceId)],
 );
 
+export const projectStages = opsweaveSchema.table(
+  "project_stages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 100 }).notNull(),
+    description: text("description"),
+    llmContext: text("llm_context"),
+    sequence: integer("sequence").notNull().default(0),
+    archivedAt: timestamp("archived_at", { mode: "date", withTimezone: true }),
+    version: integer("version").notNull().default(1),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("project_stages_workspace_sequence_idx").on(table.workspaceId, table.sequence),
+    uniqueIndex("project_stages_workspace_name_idx").on(table.workspaceId, table.name),
+    check("project_stages_version_positive", sql`${table.version} > 0`),
+  ],
+);
+
 export const projects = opsweaveSchema.table(
   "projects",
   {
@@ -282,10 +305,16 @@ export const projects = opsweaveSchema.table(
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     name: varchar("name", { length: 200 }).notNull(),
+    description: text("description"),
+    stageId: uuid("stage_id").references(() => projectStages.id, { onDelete: "set null" }),
+    archivedAt: timestamp("archived_at", { mode: "date", withTimezone: true }),
     version: integer("version").notNull().default(1),
     ...timestamps,
   },
-  (table) => [index("projects_workspace_idx").on(table.workspaceId)],
+  (table) => [
+    index("projects_workspace_idx").on(table.workspaceId),
+    index("projects_workspace_stage_idx").on(table.workspaceId, table.stageId, table.createdAt),
+  ],
 );
 
 export const tasks = opsweaveSchema.table(
@@ -297,6 +326,15 @@ export const tasks = opsweaveSchema.table(
       .references(() => workspaces.id, { onDelete: "cascade" }),
     projectId: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),
     title: varchar("title", { length: 300 }).notNull(),
+    allocatedHours: numeric("allocated_hours", { mode: "number", precision: 10, scale: 2 }),
+    size: varchar("size", { length: 16 }),
+    valueAdd: text("value_add"),
+    workDescription: text("work_description"),
+    definitionOfDone: text("definition_of_done"),
+    dueDate: date("due_date", { mode: "string" }),
+    delegateId: uuid("delegate_id").references(() => delegates.id, { onDelete: "set null" }),
+    completedAt: timestamp("completed_at", { mode: "date", withTimezone: true }),
+    cancelledAt: timestamp("cancelled_at", { mode: "date", withTimezone: true }),
     workflowLane: varchar("workflow_lane", { length: 32 }).notNull().default("inbox"),
     businessValueScore: integer("business_value_score"),
     businessValueRationale: text("business_value_rationale"),
@@ -325,8 +363,38 @@ export const tasks = opsweaveSchema.table(
     ),
     check(
       "tasks_value_source",
-      sql`${table.valueSource} is null or ${table.valueSource} in ('owner', 'ai', 'import')`,
+      sql`${table.valueSource} is null or ${table.valueSource} in ('owner', 'ai_proposed', 'imported')`,
     ),
+    check(
+      "tasks_size",
+      sql`${table.size} is null or ${table.size} in ('small', 'medium', 'large')`,
+    ),
+    check(
+      "tasks_workflow_lane",
+      sql`${table.workflowLane} in ('inbox', 'this_week', 'today_1', 'today_2', 'today_3', 'in_focus', 'monitor_validate', 'waiting', 'delegated', 'done', 'cancelled')`,
+    ),
+    check(
+      "tasks_allocated_hours_range",
+      sql`${table.allocatedHours} is null or (${table.allocatedHours} >= 0 and ${table.allocatedHours} <= 10000)`,
+    ),
+  ],
+);
+
+export const taskChecklistItems = opsweaveSchema.table(
+  "task_checklist_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    label: varchar("label", { length: 500 }).notNull(),
+    completed: boolean("completed").notNull().default(false),
+    position: integer("position").notNull().default(0),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("task_checklist_items_position_idx").on(table.taskId, table.position),
+    check("task_checklist_items_position_non_negative", sql`${table.position} >= 0`),
   ],
 );
 

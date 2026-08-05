@@ -24,7 +24,7 @@ const assertIsolatedTestDatabase = (value: string | undefined): string => {
   return value;
 };
 
-describe("Phase 1 database and repositories", () => {
+describe("database migrations and repositories", () => {
   const isolatedDatabaseUrl = assertIsolatedTestDatabase(databaseUrl);
   const pool = new Pool({ connectionString: isolatedDatabaseUrl, max: 4 });
   const database = createDatabase(pool);
@@ -51,7 +51,9 @@ describe("Phase 1 database and repositories", () => {
         "workspace_working_hours",
         "encrypted_provider_credentials",
         "projects",
+        "project_stages",
         "tasks",
+        "task_checklist_items",
         "audit_events",
         "trash_records",
       ]),
@@ -126,6 +128,52 @@ describe("Phase 1 database and repositories", () => {
     ).rejects.toMatchObject({ code: "23514" });
   });
 
+  it("creates project and task boards with stable manual and value ordering", async () => {
+    const owner = await store.findOwnerForLogin("synthetic-owner");
+    if (owner === null) throw new Error("Expected owner.");
+    const stages = await store.listProjectStages(owner.workspaceId);
+    expect(stages.map((stage) => stage.name)).toEqual(["Planned", "In progress", "Done"]);
+    const project = await store.createProject(owner.workspaceId, owner.ownerId, {
+      name: "Phase 2 project",
+    });
+    expect(project.stageId).toBe(stages[0]?.id);
+    const first = await store.createTask(owner.workspaceId, owner.ownerId, {
+      businessValueScore: 30,
+      checklist: [{ completed: false, label: "Define outcome", position: 0 }],
+      dueDate: "2026-08-10",
+      projectId: project.id,
+      title: "Lower value task",
+      valueSource: "owner",
+      workflowLane: "inbox",
+    });
+    const second = await store.createTask(owner.workspaceId, owner.ownerId, {
+      businessValueScore: 90,
+      title: "Higher value task",
+      valueSource: "owner",
+      workflowLane: "inbox",
+    });
+    expect(first.checklist).toHaveLength(1);
+    expect(
+      (await store.listTasks(owner.workspaceId, "greatest_value"))
+        .filter((task) => task.workflowLane === "inbox")
+        .slice(0, 2)
+        .map((task) => task.id),
+    ).toEqual([second.id, first.id]);
+    await store.moveTask(owner.workspaceId, owner.ownerId, second.id, "today_1", second.version);
+    const nextFirst = await store.listTasks(owner.workspaceId, "manual");
+    const moved = nextFirst.find((task) => task.id === second.id);
+    expect(moved?.workflowLane).toBe("today_1");
+    await expect(
+      store.updateTask(owner.workspaceId, owner.ownerId, first.id, {
+        businessValueScore: 99,
+        title: first.title,
+        valueSource: "ai_proposed",
+        version: first.version,
+        workflowLane: first.workflowLane,
+      }),
+    ).rejects.toBeInstanceOf(StoreConflictError);
+  });
+
   it("stores provider credentials as ciphertext and redacts audit metadata", async () => {
     const owner = await store.findOwnerForLogin("synthetic-owner");
     if (owner === null) throw new Error("Expected owner.");
@@ -170,7 +218,7 @@ describe("Phase 1 database and repositories", () => {
       Number(
         (
           await pool.query<{ count: string }>(
-            "SELECT count(*)::text AS count FROM opsweave.projects",
+            "SELECT count(*)::text AS count FROM opsweave.projects WHERE name='Preserved project'",
           )
         ).rows[0]?.count,
       ),

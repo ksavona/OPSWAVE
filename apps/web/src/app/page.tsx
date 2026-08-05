@@ -1,15 +1,29 @@
 import Link from "next/link";
 
 import { LogoutButton } from "../components/logout-button";
+import { Workspace } from "../components/workspace";
 import { getCurrentSession } from "../server/current-session";
+import { getStore } from "../server/runtime";
+import { WorkService } from "../server/work-service";
 
-export default async function HomePage() {
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ sort?: string }>;
+}) {
   const session = await getCurrentSession();
+  const workspace = await new WorkService(getStore()).readWorkspace(
+    session,
+    (await searchParams).sort,
+  );
+  const initial = JSON.parse(JSON.stringify(workspace)) as Parameters<
+    typeof Workspace
+  >[0]["initial"];
   return (
     <main className="app-page">
       <header className="app-header">
         <div>
-          <p className="eyebrow">Authenticated foundation</p>
+          <p className="eyebrow">Personal operations workspace</p>
           <p className="owner-label">Signed in as {session.username}</p>
         </div>
         <nav aria-label="Primary navigation">
@@ -17,27 +31,7 @@ export default async function HomePage() {
           <LogoutButton />
         </nav>
       </header>
-      <section className="hero-panel">
-        <h1>Project workspace</h1>
-        <p className="lede">
-          Authentication, private settings, credential protection, and audit foundations are active.
-          Project and task workflows arrive in Phase 2.
-        </p>
-        <div className="status-card">
-          <div className="status-item">
-            <span className="status-label">Access</span>
-            <span className="status-value">Owner session required</span>
-          </div>
-          <div className="status-item">
-            <span className="status-label">AI verification</span>
-            <span className="status-value">Deterministic fake only</span>
-          </div>
-          <div className="status-item">
-            <span className="status-label">Product workflows</span>
-            <span className="status-value">Not implemented</span>
-          </div>
-        </div>
-      </section>
+      <Workspace initial={initial} />
     </main>
   );
 }

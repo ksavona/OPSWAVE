@@ -42,7 +42,7 @@ pnpm exec playwright install --with-deps chromium
 
 Local developers may set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to a compatible existing binary. CI uses Playwright's pinned browser runtime.
 
-Browser setup resets only the guarded isolated test database, applies migrations, and bootstraps a synthetic owner. Tests cover anonymous redirects, authentication, every Phase 1 settings section, credential response redaction, password rotation, logout/re-login, and axe scans.
+Browser setup resets only the guarded isolated test database, applies migrations, and bootstraps a synthetic owner. Tests cover anonymous redirects, authentication, Phase 1 settings, Phase 2 project/task board flows, credential response redaction, password rotation, logout/re-login, and axe scans.
 
 ## External services
 

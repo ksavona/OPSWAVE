@@ -112,6 +112,92 @@ export interface ProviderCredentialStatus {
   readonly verificationStatus: string;
 }
 
+export type BoardSortMode = "greatest_value" | "manual" | "planning_priority";
+export type TaskLane =
+  | "cancelled"
+  | "delegated"
+  | "done"
+  | "in_focus"
+  | "inbox"
+  | "monitor_validate"
+  | "this_week"
+  | "today_1"
+  | "today_2"
+  | "today_3"
+  | "waiting";
+
+export interface ProjectStageRecord {
+  readonly archivedAt: Date | null;
+  readonly description: string | null;
+  readonly id: string;
+  readonly llmContext: string | null;
+  readonly name: string;
+  readonly sequence: number;
+  readonly version: number;
+}
+
+export interface ProjectRecord {
+  readonly archivedAt: Date | null;
+  readonly createdAt: Date;
+  readonly description: string | null;
+  readonly id: string;
+  readonly name: string;
+  readonly stageId: string | null;
+  readonly stageName: string | null;
+  readonly version: number;
+}
+
+export interface TaskChecklistItemRecord {
+  readonly completed: boolean;
+  readonly id: string;
+  readonly label: string;
+  readonly position: number;
+}
+
+export interface TaskRecord {
+  readonly allocatedHours: number | null;
+  readonly businessValueRationale: string | null;
+  readonly businessValueScore: number | null;
+  readonly cancelledAt: Date | null;
+  readonly checklist: readonly TaskChecklistItemRecord[];
+  readonly completedAt: Date | null;
+  readonly createdAt: Date;
+  readonly definitionOfDone: string | null;
+  readonly dueDate: string | null;
+  readonly id: string;
+  readonly manualLanePosition: number;
+  readonly projectId: string | null;
+  readonly size: "large" | "medium" | "small" | null;
+  readonly title: string;
+  readonly valueAdd: string | null;
+  readonly valueSource: "ai_proposed" | "imported" | "owner" | null;
+  readonly version: number;
+  readonly workDescription: string | null;
+  readonly workflowLane: TaskLane;
+}
+
+export interface ProjectInput {
+  description?: string | null | undefined;
+  name: string;
+  stageId?: string | null | undefined;
+}
+
+export interface TaskInput {
+  allocatedHours?: number | null | undefined;
+  businessValueRationale?: string | null | undefined;
+  businessValueScore?: number | null | undefined;
+  checklist?: readonly { completed: boolean; label: string; position: number }[] | undefined;
+  definitionOfDone?: string | null | undefined;
+  dueDate?: string | null | undefined;
+  projectId?: string | null | undefined;
+  size?: "large" | "medium" | "small" | null | undefined;
+  title: string;
+  valueAdd?: string | null | undefined;
+  valueSource?: "ai_proposed" | "imported" | "owner" | null | undefined;
+  workDescription?: string | null | undefined;
+  workflowLane?: TaskLane | undefined;
+}
+
 const transaction = async <T>(pool: Pool, operation: (client: PoolClient) => Promise<T>) => {
   const client = await pool.connect();
   try {
@@ -196,6 +282,12 @@ export class OpsWeaveStore {
       await client.query("INSERT INTO opsweave.workspace_settings (workspace_id) VALUES ($1)", [
         workspaceId,
       ]);
+      for (const [sequence, name] of ["Planned", "In progress", "Done"].entries()) {
+        await client.query(
+          "INSERT INTO opsweave.project_stages (workspace_id,name,sequence) VALUES ($1,$2,$3)",
+          [workspaceId, name, sequence],
+        );
+      }
       for (const day of defaultWorkingDays) {
         await client.query(
           `INSERT INTO opsweave.workspace_working_hours
@@ -730,6 +822,520 @@ export class OpsWeaveStore {
         targetType: "provider_credential",
         workspaceId,
       });
+    });
+  }
+
+  public async listProjectStages(workspaceId: string): Promise<ProjectStageRecord[]> {
+    const result = await this.pool.query<ProjectStageRecord>(
+      `SELECT id,name,description,llm_context AS "llmContext",sequence,archived_at AS "archivedAt",version
+       FROM opsweave.project_stages WHERE workspace_id=$1 ORDER BY archived_at NULLS FIRST,sequence,id`,
+      [workspaceId],
+    );
+    return result.rows;
+  }
+
+  public async createProjectStage(
+    workspaceId: string,
+    ownerId: string,
+    input: {
+      description?: string | null | undefined;
+      llmContext?: string | null | undefined;
+      name: string;
+      sequence: number;
+    },
+  ): Promise<ProjectStageRecord> {
+    return transaction(this.pool, async (client) => {
+      const result = await client.query<ProjectStageRecord>(
+        `INSERT INTO opsweave.project_stages (workspace_id,name,description,llm_context,sequence)
+         VALUES ($1,$2,$3,$4,$5)
+         RETURNING id,name,description,llm_context AS "llmContext",sequence,archived_at AS "archivedAt",version`,
+        [
+          workspaceId,
+          input.name,
+          input.description ?? null,
+          input.llmContext ?? null,
+          input.sequence,
+        ],
+      );
+      const stage = result.rows[0];
+      if (stage === undefined) throw new Error("Project stage creation failed.");
+      await audit(client, {
+        action: "project_stage.created",
+        actorOwnerId: ownerId,
+        metadata: { name: stage.name, sequence: stage.sequence },
+        targetId: stage.id,
+        targetType: "project_stage",
+        workspaceId,
+      });
+      return stage;
+    });
+  }
+
+  public async updateProjectStage(
+    workspaceId: string,
+    ownerId: string,
+    stageId: string,
+    input: {
+      description?: string | null | undefined;
+      llmContext?: string | null | undefined;
+      name: string;
+      sequence: number;
+      version: number;
+    },
+  ): Promise<ProjectStageRecord> {
+    return transaction(this.pool, async (client) => {
+      const result = await client.query<ProjectStageRecord>(
+        `UPDATE opsweave.project_stages SET name=$3,description=$4,llm_context=$5,sequence=$6,
+          version=version+1,updated_at=now()
+         WHERE id=$1 AND workspace_id=$2 AND version=$7
+         RETURNING id,name,description,llm_context AS "llmContext",sequence,archived_at AS "archivedAt",version`,
+        [
+          stageId,
+          workspaceId,
+          input.name,
+          input.description ?? null,
+          input.llmContext ?? null,
+          input.sequence,
+          input.version,
+        ],
+      );
+      const stage = result.rows[0];
+      if (stage === undefined)
+        throw new StoreConflictError("Project stage changed in another request.");
+      await audit(client, {
+        action: "project_stage.updated",
+        actorOwnerId: ownerId,
+        metadata: { name: stage.name, sequence: stage.sequence },
+        targetId: stage.id,
+        targetType: "project_stage",
+        workspaceId,
+      });
+      return stage;
+    });
+  }
+
+  public async archiveProjectStage(
+    workspaceId: string,
+    ownerId: string,
+    stageId: string,
+  ): Promise<void> {
+    await transaction(this.pool, async (client) => {
+      const result = await client.query(
+        `UPDATE opsweave.project_stages SET archived_at=now(),version=version+1,updated_at=now()
+         WHERE id=$1 AND workspace_id=$2 AND archived_at IS NULL`,
+        [stageId, workspaceId],
+      );
+      if (result.rowCount !== 1) throw new StoreConflictError("Project stage is not available.");
+      await audit(client, {
+        action: "project_stage.archived",
+        actorOwnerId: ownerId,
+        metadata: {},
+        targetId: stageId,
+        targetType: "project_stage",
+        workspaceId,
+      });
+    });
+  }
+
+  public async listProjects(workspaceId: string): Promise<ProjectRecord[]> {
+    const result = await this.pool.query<ProjectRecord>(
+      `SELECT p.id,p.name,p.description,p.stage_id AS "stageId",s.name AS "stageName",
+        p.archived_at AS "archivedAt",p.created_at AS "createdAt",p.version
+       FROM opsweave.projects p LEFT JOIN opsweave.project_stages s ON s.id=p.stage_id
+       WHERE p.workspace_id=$1 ORDER BY p.archived_at NULLS FIRST,s.sequence NULLS LAST,p.created_at,p.id`,
+      [workspaceId],
+    );
+    return result.rows;
+  }
+
+  public async createProject(
+    workspaceId: string,
+    ownerId: string,
+    input: ProjectInput,
+  ): Promise<ProjectRecord> {
+    return transaction(this.pool, async (client) => {
+      let stageId = input.stageId ?? null;
+      if (stageId === null) {
+        const defaultStage = await client.query<{ id: string }>(
+          `SELECT id FROM opsweave.project_stages WHERE workspace_id=$1 AND archived_at IS NULL
+           ORDER BY sequence,id LIMIT 1`,
+          [workspaceId],
+        );
+        stageId = defaultStage.rows[0]?.id ?? null;
+      }
+      if (stageId !== null) {
+        const stage = await client.query(
+          "SELECT 1 FROM opsweave.project_stages WHERE id=$1 AND workspace_id=$2",
+          [stageId, workspaceId],
+        );
+        if (stage.rowCount !== 1)
+          throw new StoreConflictError("The selected project stage is unavailable.");
+      }
+      const result = await client.query<ProjectRecord>(
+        `INSERT INTO opsweave.projects (workspace_id,name,description,stage_id) VALUES ($1,$2,$3,$4)
+         RETURNING id,name,description,stage_id AS "stageId",archived_at AS "archivedAt",created_at AS "createdAt",version`,
+        [workspaceId, input.name, input.description ?? null, stageId],
+      );
+      const project = result.rows[0];
+      if (project === undefined) throw new Error("Project creation failed.");
+      const stageName =
+        stageId === null
+          ? null
+          : ((
+              await client.query<{ name: string }>(
+                "SELECT name FROM opsweave.project_stages WHERE id=$1",
+                [stageId],
+              )
+            ).rows[0]?.name ?? null);
+      const record = { ...project, stageName };
+      await audit(client, {
+        action: "project.created",
+        actorOwnerId: ownerId,
+        metadata: { name: project.name, stageId },
+        targetId: project.id,
+        targetType: "project",
+        workspaceId,
+      });
+      return record;
+    });
+  }
+
+  public async updateProject(
+    workspaceId: string,
+    ownerId: string,
+    projectId: string,
+    input: ProjectInput & { archived?: boolean | undefined; version: number },
+  ): Promise<ProjectRecord> {
+    return transaction(this.pool, async (client) => {
+      const stageId = input.stageId ?? null;
+      if (stageId !== null) {
+        const stage = await client.query(
+          "SELECT 1 FROM opsweave.project_stages WHERE id=$1 AND workspace_id=$2",
+          [stageId, workspaceId],
+        );
+        if (stage.rowCount !== 1)
+          throw new StoreConflictError("The selected project stage is unavailable.");
+      }
+      const result = await client.query<ProjectRecord>(
+        `UPDATE opsweave.projects SET name=$3,description=$4,stage_id=$5,
+          archived_at=CASE WHEN $6 THEN coalesce(archived_at,now()) ELSE NULL END,
+          version=version+1,updated_at=now()
+         WHERE id=$1 AND workspace_id=$2 AND version=$7
+         RETURNING id,name,description,stage_id AS "stageId",archived_at AS "archivedAt",created_at AS "createdAt",version`,
+        [
+          projectId,
+          workspaceId,
+          input.name,
+          input.description ?? null,
+          stageId,
+          input.archived ?? false,
+          input.version,
+        ],
+      );
+      const project = result.rows[0];
+      if (project === undefined)
+        throw new StoreConflictError("Project changed in another request.");
+      const stageName =
+        stageId === null
+          ? null
+          : ((
+              await client.query<{ name: string }>(
+                "SELECT name FROM opsweave.project_stages WHERE id=$1",
+                [stageId],
+              )
+            ).rows[0]?.name ?? null);
+      await audit(client, {
+        action: input.archived ? "project.archived" : "project.updated",
+        actorOwnerId: ownerId,
+        metadata: { name: project.name, stageId, archived: Boolean(input.archived) },
+        targetId: project.id,
+        targetType: "project",
+        workspaceId,
+      });
+      return { ...project, stageName };
+    });
+  }
+
+  private async attachChecklist(
+    tasksToAttach: Omit<TaskRecord, "checklist">[],
+  ): Promise<TaskRecord[]> {
+    if (tasksToAttach.length === 0) return [];
+    const ids = tasksToAttach.map((task) => task.id);
+    const result = await this.pool.query<TaskChecklistItemRecord & { taskId: string }>(
+      `SELECT id,task_id AS "taskId",label,completed,position FROM opsweave.task_checklist_items
+       WHERE task_id=ANY($1::uuid[]) ORDER BY task_id,position,id`,
+      [ids],
+    );
+    const byTask = new Map<string, TaskChecklistItemRecord[]>();
+    for (const item of result.rows) {
+      const items = byTask.get(item.taskId) ?? [];
+      items.push({
+        completed: item.completed,
+        id: item.id,
+        label: item.label,
+        position: item.position,
+      });
+      byTask.set(item.taskId, items);
+    }
+    return tasksToAttach.map((task) => ({ ...task, checklist: byTask.get(task.id) ?? [] }));
+  }
+
+  public async listTasks(
+    workspaceId: string,
+    sort: BoardSortMode,
+    projectId?: string,
+  ): Promise<TaskRecord[]> {
+    const orderBy =
+      sort === "greatest_value"
+        ? `CASE WHEN business_value_score IS NULL THEN 1 ELSE 0 END,business_value_score DESC,
+           due_date NULLS LAST,created_at,id`
+        : sort === "planning_priority"
+          ? "due_date NULLS LAST,created_at,id"
+          : "manual_lane_position,created_at,id";
+    const result = await this.pool.query<Omit<TaskRecord, "checklist">>(
+      `SELECT id,project_id AS "projectId",title,workflow_lane AS "workflowLane",
+        allocated_hours::float8 AS "allocatedHours",size,value_add AS "valueAdd",
+        work_description AS "workDescription",definition_of_done AS "definitionOfDone",due_date AS "dueDate",
+        business_value_score AS "businessValueScore",business_value_rationale AS "businessValueRationale",
+        value_source AS "valueSource",manual_lane_position::float8 AS "manualLanePosition",
+        completed_at AS "completedAt",cancelled_at AS "cancelledAt",version,created_at AS "createdAt"
+       FROM opsweave.tasks WHERE workspace_id=$1 ${projectId === undefined ? "" : "AND project_id=$2"}
+       ORDER BY workflow_lane,${orderBy}`,
+      projectId === undefined ? [workspaceId] : [workspaceId, projectId],
+    );
+    return this.attachChecklist(result.rows);
+  }
+
+  public async createTask(
+    workspaceId: string,
+    ownerId: string,
+    input: TaskInput,
+  ): Promise<TaskRecord> {
+    return transaction(this.pool, async (client) => {
+      const lane = input.workflowLane ?? "inbox";
+      if (input.projectId !== undefined && input.projectId !== null) {
+        const project = await client.query(
+          "SELECT 1 FROM opsweave.projects WHERE id=$1 AND workspace_id=$2",
+          [input.projectId, workspaceId],
+        );
+        if (project.rowCount !== 1)
+          throw new StoreConflictError("The selected project is unavailable.");
+      }
+      const position = await client.query<{ position: number }>(
+        `SELECT coalesce(max(manual_lane_position),0)::float8+1 AS position FROM opsweave.tasks
+         WHERE workspace_id=$1 AND workflow_lane=$2`,
+        [workspaceId, lane],
+      );
+      const result = await client.query<Omit<TaskRecord, "checklist">>(
+        `INSERT INTO opsweave.tasks
+          (workspace_id,project_id,title,workflow_lane,allocated_hours,size,value_add,work_description,
+           definition_of_done,due_date,business_value_score,business_value_rationale,value_source,
+           value_updated_at,manual_lane_position,completed_at,cancelled_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
+           CASE WHEN $11::integer IS NULL THEN NULL ELSE now() END,$14,
+           CASE WHEN $4::varchar='done' THEN now() ELSE NULL END,CASE WHEN $4::varchar='cancelled' THEN now() ELSE NULL END)
+         RETURNING id,project_id AS "projectId",title,workflow_lane AS "workflowLane",
+          allocated_hours::float8 AS "allocatedHours",size,value_add AS "valueAdd",work_description AS "workDescription",
+          definition_of_done AS "definitionOfDone",due_date AS "dueDate",business_value_score AS "businessValueScore",
+          business_value_rationale AS "businessValueRationale",value_source AS "valueSource",
+          manual_lane_position::float8 AS "manualLanePosition",completed_at AS "completedAt",cancelled_at AS "cancelledAt",version,created_at AS "createdAt"`,
+        [
+          workspaceId,
+          input.projectId ?? null,
+          input.title,
+          lane,
+          input.allocatedHours ?? null,
+          input.size ?? null,
+          input.valueAdd ?? null,
+          input.workDescription ?? null,
+          input.definitionOfDone ?? null,
+          input.dueDate ?? null,
+          input.businessValueScore ?? null,
+          input.businessValueRationale ?? null,
+          input.valueSource ?? null,
+          position.rows[0]?.position ?? 1,
+        ],
+      );
+      const task = result.rows[0];
+      if (task === undefined) throw new Error("Task creation failed.");
+      for (const item of input.checklist ?? []) {
+        await client.query(
+          "INSERT INTO opsweave.task_checklist_items (task_id,label,completed,position) VALUES ($1,$2,$3,$4)",
+          [task.id, item.label, item.completed, item.position],
+        );
+      }
+      await audit(client, {
+        action: "task.created",
+        actorOwnerId: ownerId,
+        metadata: { lane, projectId: task.projectId, title: task.title },
+        targetId: task.id,
+        targetType: "task",
+        workspaceId,
+      });
+      return {
+        ...task,
+        checklist: (input.checklist ?? []).map((item, index) => ({
+          ...item,
+          id: `created-${String(index)}`,
+        })),
+      };
+    });
+  }
+
+  public async updateTask(
+    workspaceId: string,
+    ownerId: string,
+    taskId: string,
+    input: TaskInput & { version: number },
+  ): Promise<TaskRecord> {
+    return transaction(this.pool, async (client) => {
+      const existingResult = await client.query<{ valueSource: TaskRecord["valueSource"] }>(
+        'SELECT value_source AS "valueSource" FROM opsweave.tasks WHERE id=$1 AND workspace_id=$2',
+        [taskId, workspaceId],
+      );
+      const existing = existingResult.rows[0];
+      if (existing === undefined) throw new StoreConflictError("Task is unavailable.");
+      if (existing.valueSource === "owner" && input.valueSource === "ai_proposed")
+        throw new StoreConflictError("An AI proposal cannot overwrite an owner value.");
+      if (input.projectId !== undefined && input.projectId !== null) {
+        const project = await client.query(
+          "SELECT 1 FROM opsweave.projects WHERE id=$1 AND workspace_id=$2",
+          [input.projectId, workspaceId],
+        );
+        if (project.rowCount !== 1)
+          throw new StoreConflictError("The selected project is unavailable.");
+      }
+      const lane = input.workflowLane ?? "inbox";
+      const result = await client.query<Omit<TaskRecord, "checklist">>(
+        `UPDATE opsweave.tasks SET project_id=$3,title=$4,workflow_lane=$5,allocated_hours=$6,size=$7,
+          value_add=$8,work_description=$9,definition_of_done=$10,due_date=$11,business_value_score=$12,
+          business_value_rationale=$13,value_source=$14,value_updated_at=CASE WHEN $12 IS NULL THEN NULL ELSE now() END,
+          completed_at=CASE WHEN $5='done' THEN coalesce(completed_at,now()) ELSE NULL END,
+          cancelled_at=CASE WHEN $5='cancelled' THEN coalesce(cancelled_at,now()) ELSE NULL END,
+          version=version+1,updated_at=now() WHERE id=$1 AND workspace_id=$2 AND version=$15
+         RETURNING id,project_id AS "projectId",title,workflow_lane AS "workflowLane",allocated_hours::float8 AS "allocatedHours",
+          size,value_add AS "valueAdd",work_description AS "workDescription",definition_of_done AS "definitionOfDone",due_date AS "dueDate",
+          business_value_score AS "businessValueScore",business_value_rationale AS "businessValueRationale",value_source AS "valueSource",
+          manual_lane_position::float8 AS "manualLanePosition",completed_at AS "completedAt",cancelled_at AS "cancelledAt",version,created_at AS "createdAt"`,
+        [
+          taskId,
+          workspaceId,
+          input.projectId ?? null,
+          input.title,
+          lane,
+          input.allocatedHours ?? null,
+          input.size ?? null,
+          input.valueAdd ?? null,
+          input.workDescription ?? null,
+          input.definitionOfDone ?? null,
+          input.dueDate ?? null,
+          input.businessValueScore ?? null,
+          input.businessValueRationale ?? null,
+          input.valueSource ?? null,
+          input.version,
+        ],
+      );
+      const task = result.rows[0];
+      if (task === undefined) throw new StoreConflictError("Task changed in another request.");
+      if (input.checklist !== undefined) {
+        await client.query("DELETE FROM opsweave.task_checklist_items WHERE task_id=$1", [taskId]);
+        for (const item of input.checklist)
+          await client.query(
+            "INSERT INTO opsweave.task_checklist_items (task_id,label,completed,position) VALUES ($1,$2,$3,$4)",
+            [taskId, item.label, item.completed, item.position],
+          );
+      }
+      await audit(client, {
+        action: "task.updated",
+        actorOwnerId: ownerId,
+        metadata: { lane, valueScore: task.businessValueScore, valueSource: task.valueSource },
+        targetId: task.id,
+        targetType: "task",
+        workspaceId,
+      });
+      return {
+        ...task,
+        checklist: (input.checklist ?? []).map((item, index) => ({
+          ...item,
+          id: `updated-${String(index)}`,
+        })),
+      };
+    });
+  }
+
+  public async moveTask(
+    workspaceId: string,
+    ownerId: string,
+    taskId: string,
+    lane: TaskLane,
+    version: number,
+  ): Promise<TaskRecord> {
+    return transaction(this.pool, async (client) => {
+      const position = await client.query<{ position: number }>(
+        `SELECT coalesce(max(manual_lane_position),0)::float8+1 AS position FROM opsweave.tasks WHERE workspace_id=$1 AND workflow_lane=$2`,
+        [workspaceId, lane],
+      );
+      const result = await client.query<Omit<TaskRecord, "checklist">>(
+        `UPDATE opsweave.tasks SET workflow_lane=$3,manual_lane_position=$4,
+          completed_at=CASE WHEN $3::varchar='done' THEN coalesce(completed_at,now()) ELSE NULL END,
+          cancelled_at=CASE WHEN $3::varchar='cancelled' THEN coalesce(cancelled_at,now()) ELSE NULL END,
+          version=version+1,updated_at=now() WHERE id=$1 AND workspace_id=$2 AND version=$5
+         RETURNING id,project_id AS "projectId",title,workflow_lane AS "workflowLane",allocated_hours::float8 AS "allocatedHours",size,value_add AS "valueAdd",work_description AS "workDescription",definition_of_done AS "definitionOfDone",due_date AS "dueDate",business_value_score AS "businessValueScore",business_value_rationale AS "businessValueRationale",value_source AS "valueSource",manual_lane_position::float8 AS "manualLanePosition",completed_at AS "completedAt",cancelled_at AS "cancelledAt",version,created_at AS "createdAt"`,
+        [taskId, workspaceId, lane, position.rows[0]?.position ?? 1, version],
+      );
+      const task = result.rows[0];
+      if (task === undefined) throw new StoreConflictError("Task changed in another request.");
+      await audit(client, {
+        action: "task.moved",
+        actorOwnerId: ownerId,
+        metadata: { workflowLane: lane },
+        targetId: taskId,
+        targetType: "task",
+        workspaceId,
+      });
+      return { ...task, checklist: [] };
+    });
+  }
+
+  public async reorderTask(
+    workspaceId: string,
+    ownerId: string,
+    taskId: string,
+    direction: "earlier" | "later",
+    version: number,
+  ): Promise<number> {
+    return transaction(this.pool, async (client) => {
+      const currentResult = await client.query<{ workflowLane: TaskLane }>(
+        'SELECT workflow_lane AS "workflowLane" FROM opsweave.tasks WHERE id=$1 AND workspace_id=$2 AND version=$3 FOR UPDATE',
+        [taskId, workspaceId, version],
+      );
+      const current = currentResult.rows[0];
+      if (current === undefined) throw new StoreConflictError("Task changed in another request.");
+      const rows = await client.query<{ id: string }>(
+        "SELECT id FROM opsweave.tasks WHERE workspace_id=$1 AND workflow_lane=$2 ORDER BY manual_lane_position,created_at,id FOR UPDATE",
+        [workspaceId, current.workflowLane],
+      );
+      const index = rows.rows.findIndex((row) => row.id === taskId);
+      const target = direction === "earlier" ? index - 1 : index + 1;
+      if (index < 0 || target < 0 || target >= rows.rows.length) return version;
+      const ids = rows.rows.map((row) => row.id);
+      const selected = ids.splice(index, 1)[0];
+      if (selected === undefined) throw new Error("Task ordering failed.");
+      ids.splice(target, 0, selected);
+      for (const [position, id] of ids.entries())
+        await client.query(
+          "UPDATE opsweave.tasks SET manual_lane_position=$2,version=CASE WHEN id=$3 THEN version+1 ELSE version END,updated_at=now() WHERE id=$1",
+          [id, position + 1, taskId],
+        );
+      await audit(client, {
+        action: "task.manual_reordered",
+        actorOwnerId: ownerId,
+        metadata: { direction },
+        targetId: taskId,
+        targetType: "task",
+        workspaceId,
+      });
+      return version + 1;
     });
   }
 

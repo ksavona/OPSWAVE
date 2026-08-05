@@ -11,11 +11,14 @@ import {
 } from "./request-security";
 import { getStore, logger } from "./runtime";
 import { SettingsService } from "./settings-service";
+import { WorkService } from "./work-service";
 
 let authService: AuthService | undefined;
 let settingsService: SettingsService | undefined;
+let workService: WorkService | undefined;
 const auth = () => (authService ??= new AuthService(getStore(), createRateLimitGate()));
 const settings = () => (settingsService ??= new SettingsService(getStore()));
+const work = () => (workService ??= new WorkService(getStore()));
 
 const json = (body: unknown, status = 200, headers?: HeadersInit) =>
   Response.json(body, { status, ...(headers === undefined ? {} : { headers }) });
@@ -184,15 +187,91 @@ export const securitySettingsHandler = (request: Request) =>
     });
   });
 
+export const workspaceHandler = (request: Request) =>
+  run(async () => {
+    const session = await requireSession(request);
+    const sort = new URL(request.url).searchParams.get("sort") ?? undefined;
+    return json(await work().readWorkspace(session, sort));
+  });
+
+export const createProjectHandler = (request: Request) =>
+  run(async () => {
+    assertSameOrigin(request);
+    return json(
+      await work().createProject(await requireSession(request), await body(request)),
+      201,
+    );
+  });
+
+export const updateProjectHandler = (request: Request, projectId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    return json(
+      await work().updateProject(await requireSession(request), projectId, await body(request)),
+    );
+  });
+
+export const createProjectStageHandler = (request: Request) =>
+  run(async () => {
+    assertSameOrigin(request);
+    return json(await work().createStage(await requireSession(request), await body(request)), 201);
+  });
+
+export const updateProjectStageHandler = (request: Request, stageId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    return json(
+      await work().updateStage(await requireSession(request), stageId, await body(request)),
+    );
+  });
+
+export const archiveProjectStageHandler = (request: Request, stageId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await work().archiveStage(await requireSession(request), stageId);
+    return json({ archived: true });
+  });
+
+export const createTaskHandler = (request: Request) =>
+  run(async () => {
+    assertSameOrigin(request);
+    return json(await work().createTask(await requireSession(request), await body(request)), 201);
+  });
+
+export const updateTaskHandler = (request: Request, taskId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    return json(
+      await work().updateTask(await requireSession(request), taskId, await body(request)),
+    );
+  });
+
+export const moveTaskHandler = (request: Request, taskId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    return json(await work().moveTask(await requireSession(request), taskId, await body(request)));
+  });
+
+export const reorderTaskHandler = (request: Request, taskId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    return json({
+      version: await work().reorderTask(await requireSession(request), taskId, await body(request)),
+    });
+  });
+
 export const resetHttpServicesForTests = () => {
   authService = undefined;
   settingsService = undefined;
+  workService = undefined;
 };
 
 export const configureHttpServicesForTests = (services: {
   readonly auth?: AuthService;
   readonly settings?: SettingsService;
+  readonly work?: WorkService;
 }) => {
   authService = services.auth;
   settingsService = services.settings;
+  workService = services.work;
 };

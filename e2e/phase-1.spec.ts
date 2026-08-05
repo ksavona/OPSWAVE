@@ -80,3 +80,30 @@ test("health metadata is bounded and excludes secret configuration", async ({ re
   expect(body).not.toContain("OPENAI_API_KEY");
   expect(body).not.toContain("AI_CREDENTIAL_MASTER_KEY");
 });
+
+test("Phase 2 project and task boards persist controlled changes", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("synthetic-owner");
+  await page.getByLabel("Password", { exact: true }).fill("synthetic replacement password");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.getByRole("button", { name: "New project" }).click();
+  await page.getByLabel("Project name").fill("Browser project");
+  await page.locator('select[name="stageId"]').selectOption({ label: "Planned" });
+  const projectResponse = page.waitForResponse("**/api/projects");
+  await page.getByRole("button", { name: "Create project" }).click();
+  expect((await projectResponse).status()).toBe(201);
+  await expect(page.getByText("Browser project")).toBeVisible();
+
+  await page.getByRole("button", { name: "New task" }).click();
+  await page.getByLabel("Task title").fill("Browser task");
+  await page.getByLabel("Value score (1–100)").fill("75");
+  await page.getByRole("button", { name: "Create task" }).click();
+  await expect(page.getByText("Value 75/100")).toBeVisible();
+
+  await page.getByLabel("Board order").selectOption("greatest_value");
+  await expect(page.getByText(/computed by the server within each lane/iu)).toBeVisible();
+  await page.getByLabel("Move to").selectOption("today_1");
+  await page.getByRole("button", { name: "Move", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Today 1" })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});

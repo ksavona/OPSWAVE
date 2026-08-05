@@ -6,7 +6,7 @@
 OpsWeave is an early-stage personal operations workspace intended to turn unstructured work into structured, reviewable projects and tasks. The project is a public example of disciplined AI engineering, operational design, governance, testing, and maintainable software delivery.
 
 > [!IMPORTANT]
-> Phase 1 provides a private single-owner shell and settings foundation, not a complete operations product. Project/task workflows, AI intake, planning, automation, reporting, and supported production deployment are not implemented.
+> Phase 2 adds the private project and task workspace. AI intake, planning automation, reporting, and supported production deployment remain out of scope.
 
 ## What exists
 
@@ -16,6 +16,8 @@ OpsWeave is an early-stage personal operations workspace intended to turn unstru
 - A PostgreSQL 18.4 schema with owner, session, settings, encrypted credential, audit, and future workflow foundations.
 - Local-only owner bootstrap/recovery, Argon2id password hashing, revocable opaque sessions, and durable rate limits.
 - General, working-time, fake-provider credential, prioritisation, and security settings.
+- Project and task CRUD, configurable project stages, a project Kanban, and an eleven-lane global task board.
+- Server-authoritative manual, planning-priority, and greatest-value board ordering with optimistic conflict handling and audit events.
 - AES-256-GCM credential persistence and a deterministic fake verification provider; no live provider adapter.
 - Unit, component, route, migration, browser, accessibility, secret-leak, license, build, and dependency-audit checks.
 - One full validation command shared by local development and CI.
@@ -87,6 +89,7 @@ The HTML coverage report is written to `coverage/index.html`. See [testing and v
 - [Environment configuration](docs/environment.md)
 - [Authentication and owner access](docs/authentication.md)
 - [Settings](docs/settings.md)
+- [Projects and tasks](docs/projects-and-tasks.md)
 - [Security and threat model](docs/security.md)
 - [Testing and validation](docs/testing.md)
 - [Deployment assumptions](docs/deployment.md)
