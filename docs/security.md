@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 1 implements single-owner authentication, server-side authorization checks, credential persistence, rate limiting, and security settings. Live AI access and supported production deployment remain absent. No production-readiness claim is made.
+Phases 1–4 implement single-owner authentication, server-side authorization checks, credential persistence, rate limiting, project/task controls, and deterministic reviewed intake. Live AI access and supported production deployment remain absent. No production-readiness claim is made.
 
 ## Protected assets
 
@@ -88,6 +88,8 @@ Phase 1 implements single-owner authentication, server-side authorization checks
 - Optimistic settings versions, parameterized repository queries, database range/uniqueness constraints, and workspace scope.
 - Environment-managed credential precedence and read-only presentation; settings-managed ciphertext never hydrates browser state.
 - Bounded request bodies, generic safe errors, durable login attempt events, and fail-closed sensitive-action limits.
+- CSV exports prefix formula-like cells with a single quote before quoting.
+- Intake source text remains in the trusted persistence/worker boundary; UI and audit records expose only reviewable derived proposals and safe metadata.
 
 ## Residual risk
 

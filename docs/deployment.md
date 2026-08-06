@@ -2,7 +2,7 @@
 
 ## Status
 
-No supported production deployment exists in Phase 1. This document records constraints for future deployment work and the environment used for local validation.
+No supported production deployment exists. This document records constraints for future deployment work and the environment used for local validation.
 
 ## Planned topology
 

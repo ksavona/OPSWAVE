@@ -11,6 +11,7 @@ This directory contains durable public documentation for OpsWeave. Documents des
 - [Settings](settings.md)
 - [AI intake](intake.md)
 - [Reporting](reporting.md)
+- [Release checklist](release-checklist.md)
 - [Testing and validation](testing.md)
 - [Security and threat model](security.md)
 - [Deployment assumptions](deployment.md)
