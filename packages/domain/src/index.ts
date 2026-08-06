@@ -90,3 +90,4 @@ export {
   type ValueScoreSource,
   type WorkflowLane,
 } from "./work.ts";
+export { planWeeklyWork, type PlanningResult, type PlanningTask } from "./planning.ts";

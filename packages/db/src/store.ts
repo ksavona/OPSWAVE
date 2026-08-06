@@ -200,6 +200,11 @@ export interface IntakeDraftRecord {
   readonly status: "approved" | "declined" | "review_required" | "trashed";
 }
 
+export interface PlanningRunRecord {
+  readonly id: string;
+  readonly status: "completed" | "no_capacity";
+}
+
 export interface ProjectInput {
   description?: string | null | undefined;
   name: string;
@@ -1689,5 +1694,21 @@ export class OpsWeaveStore {
       [workspaceId],
     );
     return result.rows.map((row) => row.metadata);
+  }
+
+  public async recordPlanningPreview(
+    workspaceId: string,
+    settingsVersion: number,
+    settingsSnapshot: unknown,
+    status: PlanningRunRecord["status"],
+  ): Promise<PlanningRunRecord> {
+    const result = await this.pool.query<PlanningRunRecord>(
+      `INSERT INTO opsweave.planning_runs (workspace_id,kind,status,settings_version,settings_snapshot)
+       VALUES ($1,'preview',$2,$3,$4::jsonb) RETURNING id,status`,
+      [workspaceId, status, settingsVersion, JSON.stringify(settingsSnapshot)],
+    );
+    const record = result.rows[0];
+    if (record === undefined) throw new Error("Planning preview record creation failed.");
+    return record;
   }
 }
