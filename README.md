@@ -93,6 +93,7 @@ The HTML coverage report is written to `coverage/index.html`. See [testing and v
 - [Settings](docs/settings.md)
 - [Projects and tasks](docs/projects-and-tasks.md)
 - [AI intake](docs/intake.md)
+- [Reporting](docs/reporting.md)
 - [Security and threat model](docs/security.md)
 - [Testing and validation](docs/testing.md)
 - [Deployment assumptions](docs/deployment.md)

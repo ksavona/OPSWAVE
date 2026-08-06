@@ -13,6 +13,7 @@ import { getStore, logger } from "./runtime";
 import { SettingsService } from "./settings-service";
 import { IntakeService } from "./intake-service";
 import { PlanningService } from "./planning-service";
+import { ReportingService } from "./reporting-service";
 import { WorkService } from "./work-service";
 
 let authService: AuthService | undefined;
@@ -20,11 +21,13 @@ let settingsService: SettingsService | undefined;
 let workService: WorkService | undefined;
 let intakeService: IntakeService | undefined;
 let planningService: PlanningService | undefined;
+let reportingService: ReportingService | undefined;
 const auth = () => (authService ??= new AuthService(getStore(), createRateLimitGate()));
 const settings = () => (settingsService ??= new SettingsService(getStore()));
 const work = () => (workService ??= new WorkService(getStore()));
 const intake = () => (intakeService ??= new IntakeService(getStore()));
 const planning = () => (planningService ??= new PlanningService(getStore()));
+const reporting = () => (reportingService ??= new ReportingService(getStore()));
 
 const json = (body: unknown, status = 200, headers?: HeadersInit) =>
   Response.json(body, { status, ...(headers === undefined ? {} : { headers }) });
@@ -225,6 +228,20 @@ export const declineIntakeDraftHandler = (request: Request, draftId: string) =>
 export const planningPreviewHandler = (request: Request) =>
   run(async () => json(await planning().preview(await requireSession(request))));
 
+export const reportingHandler = (request: Request) =>
+  run(async () => json(await reporting().report(await requireSession(request))));
+
+export const reportingCsvHandler = (request: Request) =>
+  run(
+    async () =>
+      new Response(await reporting().taskCsv(await requireSession(request)), {
+        headers: {
+          "content-disposition": 'attachment; filename="opsweave-tasks.csv"',
+          "content-type": "text/csv; charset=utf-8",
+        },
+      }),
+  );
+
 export const createProjectHandler = (request: Request) =>
   run(async () => {
     assertSameOrigin(request);
@@ -318,6 +335,7 @@ export const resetHttpServicesForTests = () => {
   workService = undefined;
   intakeService = undefined;
   planningService = undefined;
+  reportingService = undefined;
 };
 
 export const configureHttpServicesForTests = (services: {
@@ -326,10 +344,12 @@ export const configureHttpServicesForTests = (services: {
   readonly work?: WorkService;
   readonly intake?: IntakeService;
   readonly planning?: PlanningService;
+  readonly reporting?: ReportingService;
 }) => {
   authService = services.auth;
   settingsService = services.settings;
   workService = services.work;
   intakeService = services.intake;
   planningService = services.planning;
+  reportingService = services.reporting;
 };

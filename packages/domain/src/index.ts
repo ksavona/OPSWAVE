@@ -91,3 +91,9 @@ export {
   type WorkflowLane,
 } from "./work.ts";
 export { planWeeklyWork, type PlanningResult, type PlanningTask } from "./planning.ts";
+export {
+  csvCell,
+  REPORT_METRIC_VERSION,
+  reportMetricDictionary,
+  summarizeTasks,
+} from "./reporting.ts";
