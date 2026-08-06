@@ -15,6 +15,7 @@ export {
   type SessionTimes,
   type StoredCredentialEnvelope,
   type TaskChecklistItemRecord,
+  type TaskDependencyRecord,
   type TaskInput,
   type TaskLane,
   type TaskRecord,

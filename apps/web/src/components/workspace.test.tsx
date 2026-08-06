@@ -7,6 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Workspace } from "./workspace";
 
 const initial = {
+  blockerCounts: {},
+  dependencies: [],
+  projectMetrics: {},
   projects: [
     {
       archivedAt: null,
@@ -89,6 +92,33 @@ describe("Workspace", () => {
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/workspace?sort=greatest_value",
       expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("shows blocker counts and sends dependency mutations through protected APIs", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify(initial), { status: 200 }));
+    const user = userEvent.setup();
+    const sourceTask = initial.tasks[0];
+    if (sourceTask === undefined) throw new Error("Expected synthetic task.");
+    const blocker = { ...sourceTask, id: "blocker", title: "Blocking task" };
+    render(
+      <Workspace
+        initial={{
+          ...initial,
+          blockerCounts: { task: 1 },
+          dependencies: [{ dependsOnTaskId: "blocker", taskId: "task" }],
+          tasks: [sourceTask, blocker],
+        }}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Synthetic task" }));
+    expect(screen.getByText("Transitive blockers: 1")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove Blocking task" }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task/dependencies/blocker",
+      expect.objectContaining({ method: "DELETE" }),
     );
   });
 });

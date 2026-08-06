@@ -260,6 +260,27 @@ export const reorderTaskHandler = (request: Request, taskId: string) =>
     });
   });
 
+export const taskDependenciesHandler = (request: Request) =>
+  run(async () => json(await work().dependencies(await requireSession(request))));
+
+export const createTaskDependencyHandler = (request: Request, taskId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await work().createDependency(await requireSession(request), taskId, await body(request));
+    return json({ created: true }, 201);
+  });
+
+export const removeTaskDependencyHandler = (
+  request: Request,
+  taskId: string,
+  dependsOnTaskId: string,
+) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await work().removeDependency(await requireSession(request), taskId, dependsOnTaskId);
+    return json({ removed: true });
+  });
+
 export const resetHttpServicesForTests = () => {
   authService = undefined;
   settingsService = undefined;

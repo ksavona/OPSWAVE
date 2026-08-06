@@ -1,14 +1,17 @@
 import {
   SafeApplicationError,
   boardQuerySchema,
+  deriveProjectMetrics,
   projectCreateSchema,
   projectStageSchema,
   projectStageUpdateSchema,
   projectUpdateSchema,
   taskCreateSchema,
+  taskDependencySchema,
   taskMoveSchema,
   taskReorderSchema,
   taskUpdateSchema,
+  transitiveBlockerIds,
   type KanbanSortMode,
 } from "@opsweave/domain";
 import { StoreConflictError, type OpsWeaveStore, type SessionRecord } from "@opsweave/db";
@@ -30,12 +33,22 @@ export class WorkService {
     const query = boardQuerySchema.parse({ sort: requestedSort });
     const configuration = await this.store.getWorkspaceConfiguration(session.workspaceId);
     const sort: KanbanSortMode = query.sort ?? configuration.general.defaultKanbanSort;
-    const [projects, stages, tasks] = await Promise.all([
+    const [projects, stages, tasks, dependencies] = await Promise.all([
       this.store.listProjects(session.workspaceId),
       this.store.listProjectStages(session.workspaceId),
       this.store.listTasks(session.workspaceId, sort),
+      this.store.listTaskDependencies(session.workspaceId),
     ]);
-    return { projects, sort, stages, tasks };
+    const projectMetrics = Object.fromEntries(
+      projects.map((project) => [
+        project.id,
+        deriveProjectMetrics(tasks.filter((task) => task.projectId === project.id)),
+      ]),
+    );
+    const blockerCounts = Object.fromEntries(
+      tasks.map((task) => [task.id, transitiveBlockerIds(task.id, dependencies).length]),
+    );
+    return { blockerCounts, dependencies, projectMetrics, projects, sort, stages, tasks };
   }
 
   public async createProject(session: SessionRecord, value: unknown) {
@@ -119,6 +132,33 @@ export class WorkService {
         taskId,
         input.direction,
         input.version,
+      ),
+    );
+  }
+
+  public async dependencies(session: SessionRecord) {
+    return this.store.listTaskDependencies(session.workspaceId);
+  }
+
+  public async createDependency(session: SessionRecord, taskId: string, value: unknown) {
+    const input = taskDependencySchema.parse(value);
+    return conflict(() =>
+      this.store.createTaskDependency(
+        session.workspaceId,
+        session.ownerId,
+        taskId,
+        input.dependsOnTaskId,
+      ),
+    );
+  }
+
+  public async removeDependency(session: SessionRecord, taskId: string, dependsOnTaskId: string) {
+    return conflict(() =>
+      this.store.removeTaskDependency(
+        session.workspaceId,
+        session.ownerId,
+        taskId,
+        dependsOnTaskId,
       ),
     );
   }

@@ -176,6 +176,11 @@ export interface TaskRecord {
   readonly workflowLane: TaskLane;
 }
 
+export interface TaskDependencyRecord {
+  readonly dependsOnTaskId: string;
+  readonly taskId: string;
+}
+
 export interface ProjectInput {
   description?: string | null | undefined;
   name: string;
@@ -1336,6 +1341,86 @@ export class OpsWeaveStore {
         workspaceId,
       });
       return version + 1;
+    });
+  }
+
+  public async listTaskDependencies(workspaceId: string): Promise<TaskDependencyRecord[]> {
+    const result = await this.pool.query<TaskDependencyRecord>(
+      `SELECT dependency.task_id AS "taskId",dependency.depends_on_task_id AS "dependsOnTaskId"
+       FROM opsweave.task_dependencies dependency
+       JOIN opsweave.tasks task ON task.id=dependency.task_id
+       WHERE task.workspace_id=$1 ORDER BY dependency.task_id,dependency.depends_on_task_id`,
+      [workspaceId],
+    );
+    return result.rows;
+  }
+
+  public async createTaskDependency(
+    workspaceId: string,
+    ownerId: string,
+    taskId: string,
+    dependsOnTaskId: string,
+  ): Promise<void> {
+    await transaction(this.pool, async (client) => {
+      const tasks = await client.query<{ id: string }>(
+        "SELECT id FROM opsweave.tasks WHERE workspace_id=$1 AND id=ANY($2::uuid[]) FOR UPDATE",
+        [workspaceId, [taskId, dependsOnTaskId]],
+      );
+      if (tasks.rowCount !== 2)
+        throw new StoreConflictError("Both dependency tasks must belong to this workspace.");
+      const cycle = await client.query<{ found: boolean }>(
+        `WITH RECURSIVE descendants(id) AS (
+           SELECT depends_on_task_id FROM opsweave.task_dependencies WHERE task_id=$1
+           UNION
+           SELECT dependency.depends_on_task_id FROM opsweave.task_dependencies dependency
+           JOIN descendants ON dependency.task_id=descendants.id
+         ) SELECT exists(SELECT 1 FROM descendants WHERE id=$2) AS found`,
+        [dependsOnTaskId, taskId],
+      );
+      if (cycle.rows[0]?.found)
+        throw new StoreConflictError("This dependency would create a cycle.");
+      try {
+        await client.query(
+          "INSERT INTO opsweave.task_dependencies (task_id,depends_on_task_id) VALUES ($1,$2)",
+          [taskId, dependsOnTaskId],
+        );
+      } catch (error) {
+        if ((error as { code?: string }).code === "23505")
+          throw new StoreConflictError("This dependency already exists.");
+        throw error;
+      }
+      await audit(client, {
+        action: "task.dependency.created",
+        actorOwnerId: ownerId,
+        metadata: { dependsOnTaskId },
+        targetId: taskId,
+        targetType: "task",
+        workspaceId,
+      });
+    });
+  }
+
+  public async removeTaskDependency(
+    workspaceId: string,
+    ownerId: string,
+    taskId: string,
+    dependsOnTaskId: string,
+  ): Promise<void> {
+    await transaction(this.pool, async (client) => {
+      const result = await client.query(
+        `DELETE FROM opsweave.task_dependencies dependency USING opsweave.tasks task
+         WHERE dependency.task_id=$1 AND dependency.depends_on_task_id=$2 AND task.id=dependency.task_id AND task.workspace_id=$3`,
+        [taskId, dependsOnTaskId, workspaceId],
+      );
+      if (result.rowCount !== 1) throw new StoreConflictError("Dependency is unavailable.");
+      await audit(client, {
+        action: "task.dependency.removed",
+        actorOwnerId: ownerId,
+        metadata: { dependsOnTaskId },
+        targetId: taskId,
+        targetType: "task",
+        workspaceId,
+      });
     });
   }
 

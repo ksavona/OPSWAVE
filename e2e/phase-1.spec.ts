@@ -100,10 +100,23 @@ test("Phase 2 project and task boards persist controlled changes", async ({ page
   await page.getByRole("button", { name: "Create task" }).click();
   await expect(page.getByText("Value 75/100")).toBeVisible();
 
+  await page.getByRole("button", { name: "New task" }).click();
+  await page.getByLabel("Task title").fill("Browser blocker");
+  await page.getByRole("button", { name: "Create task" }).click();
+  await page.getByRole("button", { name: "Browser task" }).click();
+  await page.getByLabel("Add blocker").selectOption({ label: "Browser blocker" });
+  await page.getByRole("button", { name: "Add dependency" }).click();
+  await expect(page.getByText("Blocked by: Browser blocker")).toBeVisible();
+  await page.getByRole("button", { exact: true, name: "Browser blocker" }).click();
+  await page.getByLabel("Add blocker").selectOption({ label: "Browser task" });
+  await page.getByRole("button", { name: "Add dependency" }).click();
+  await expect(page.getByText("This dependency would create a cycle.")).toBeVisible();
+
   await page.getByLabel("Board order").selectOption("greatest_value");
   await expect(page.getByText(/computed by the server within each lane/iu)).toBeVisible();
-  await page.getByLabel("Move to").selectOption("today_1");
-  await page.getByRole("button", { name: "Move", exact: true }).click();
+  const browserTaskCard = page.getByRole("article").filter({ hasText: "Browser task" });
+  await browserTaskCard.getByLabel("Move to").selectOption("today_1");
+  await browserTaskCard.getByRole("button", { name: "Move", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Today 1" })).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 });

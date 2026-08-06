@@ -69,6 +69,17 @@ interface Task {
   workflowLane: (typeof WORKFLOW_LANES)[number];
 }
 interface WorkspaceData {
+  blockerCounts: Record<string, number>;
+  dependencies: { dependsOnTaskId: string; taskId: string }[];
+  projectMetrics: Record<
+    string,
+    {
+      allocatedHours: number;
+      endDate: string | null;
+      progressPercent: number;
+      startDate: string | null;
+    }
+  >;
   projects: Project[];
   sort: KanbanSortMode;
   stages: Stage[];
@@ -135,6 +146,7 @@ export const Workspace = ({ initial }: { initial: WorkspaceData }) => {
           <ProjectForm stages={data.stages} onCreated={refresh} setMessage={setMessage} />
         </div>
         <ProjectBoard
+          projectMetrics={data.projectMetrics}
           projects={data.projects}
           stages={data.stages}
           onChanged={() => void refresh()}
@@ -170,7 +182,219 @@ export const Workspace = ({ initial }: { initial: WorkspaceData }) => {
         <TaskBoard data={data} onChanged={() => void refresh()} setMessage={setMessage} />
       </section>
       <StageManager stages={data.stages} onChanged={() => void refresh()} setMessage={setMessage} />
+      <TaskTimeline tasks={data.tasks} />
+      <DependencyGraph
+        blockerCounts={data.blockerCounts}
+        dependencies={data.dependencies}
+        onChanged={() => void refresh()}
+        setMessage={setMessage}
+        tasks={data.tasks}
+      />
     </div>
+  );
+};
+
+const TaskTimeline = ({ tasks }: { tasks: Task[] }) => {
+  const [scale, setScale] = useState("month");
+  const dated = tasks
+    .filter((task) => task.dueDate !== null)
+    .sort((left, right) => left.dueDate?.localeCompare(right.dueDate ?? "") ?? 0);
+  return (
+    <section className="workspace-section" aria-labelledby="timeline-heading">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Task Gantt</p>
+          <h2 id="timeline-heading">Timeline</h2>
+        </div>
+        <label className="sort-control">
+          Timeline scale
+          <select
+            onChange={(event) => {
+              setScale(event.target.value);
+            }}
+            value={scale}
+          >
+            {["day", "week", "month", "three_month", "six_month", "one_year"].map((value) => (
+              <option key={value} value={value}>
+                {value.replaceAll("_", " ")}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <p className="muted">
+        {scale.replaceAll("_", " ")} view. Project dates are derived from task dates.
+      </p>
+      {dated.length === 0 ? (
+        <p>No dated tasks yet.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Task</th>
+              <th>Due date</th>
+              <th>Allocated hours</th>
+            </tr>
+          </thead>
+          <tbody>
+            {dated.map((task) => (
+              <tr key={task.id}>
+                <td>{task.title}</td>
+                <td>{task.dueDate}</td>
+                <td>{task.allocatedHours ?? 0}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {tasks.some((task) => task.dueDate === null) ? (
+        <p className="muted">
+          Undated tasks are not placed on the timeline:{" "}
+          {tasks
+            .filter((task) => task.dueDate === null)
+            .map((task) => task.title)
+            .join(", ")}
+        </p>
+      ) : null}
+    </section>
+  );
+};
+
+const DependencyGraph = ({
+  blockerCounts,
+  dependencies,
+  onChanged,
+  setMessage,
+  tasks,
+}: {
+  blockerCounts: WorkspaceData["blockerCounts"];
+  dependencies: WorkspaceData["dependencies"];
+  onChanged: () => void;
+  setMessage: (value: string) => void;
+  tasks: Task[];
+}) => {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const tasksById = new Map(tasks.map((task) => [task.id, task]));
+  const selected = selectedId === null ? null : (tasksById.get(selectedId) ?? null);
+  const selectedEdges =
+    selected === null ? [] : dependencies.filter((edge) => edge.taskId === selected.id);
+  const add = async (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
+    event.preventDefault();
+    if (selected === null) return;
+    const dependsOnTaskId = new FormData(event.currentTarget).get("dependsOnTaskId");
+    try {
+      await request(`/api/tasks/${selected.id}/dependencies`, "POST", { dependsOnTaskId });
+      onChanged();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to create dependency.");
+    }
+  };
+  const remove = async (dependsOnTaskId: string) => {
+    if (selected === null) return;
+    try {
+      await request(`/api/tasks/${selected.id}/dependencies/${dependsOnTaskId}`, "DELETE");
+      onChanged();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to remove dependency.");
+    }
+  };
+  return (
+    <section className="workspace-section" aria-labelledby="dependencies-heading">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Task graph</p>
+          <h2 id="dependencies-heading">Dependencies</h2>
+        </div>
+      </div>
+      <p className="muted">
+        Select a task to inspect its direct blockers. Dependency edges are validated on the server
+        and cannot form cycles.
+      </p>
+      <ul className="stage-list">
+        {tasks.map((task) => (
+          <li key={task.id}>
+            <button
+              className="secondary"
+              onClick={() => {
+                setSelectedId(task.id);
+              }}
+              type="button"
+            >
+              {task.title}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {selected ? (
+        <aside aria-live="polite">
+          <h3>{selected.title}</h3>
+          <p>
+            {selectedEdges.length === 0
+              ? "No direct blockers."
+              : `Blocked by: ${selectedEdges
+                  .map((edge) => tasksById.get(edge.dependsOnTaskId)?.title ?? "Unknown task")
+                  .join(", ")}`}
+          </p>
+          <p className="muted">Transitive blockers: {blockerCounts[selected.id] ?? 0}</p>
+          <form
+            className="move-form"
+            onSubmit={(event) => {
+              void add(event);
+            }}
+          >
+            <label>
+              Add blocker
+              <select name="dependsOnTaskId" required>
+                <option value="">Choose task</option>
+                {tasks
+                  .filter(
+                    (task) =>
+                      task.id !== selected.id &&
+                      !selectedEdges.some((edge) => edge.dependsOnTaskId === task.id),
+                  )
+                  .map((task) => (
+                    <option key={task.id} value={task.id}>
+                      {task.title}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <button disabled={tasks.length < 2} type="submit">
+              Add dependency
+            </button>
+          </form>
+          {selectedEdges.map((edge) => (
+            <button
+              className="secondary"
+              key={edge.dependsOnTaskId}
+              onClick={() => void remove(edge.dependsOnTaskId)}
+              type="button"
+            >
+              Remove {tasksById.get(edge.dependsOnTaskId)?.title ?? "dependency"}
+            </button>
+          ))}
+        </aside>
+      ) : null}
+      <details>
+        <summary>Mermaid export</summary>
+        <textarea
+          aria-label="Mermaid dependency export"
+          readOnly
+          value={[
+            "flowchart LR",
+            ...dependencies.flatMap((edge) => {
+              const task = tasksById.get(edge.taskId);
+              const blocker = tasksById.get(edge.dependsOnTaskId);
+              return task === undefined || blocker === undefined
+                ? []
+                : [
+                    `${edge.dependsOnTaskId}["${blocker.title.replaceAll('"', '\\"')}"] --> ${edge.taskId}["${task.title.replaceAll('"', '\\"')}"]`,
+                  ];
+            }),
+          ].join("\n")}
+        />
+      </details>
+    </section>
   );
 };
 
@@ -255,12 +479,14 @@ const ProjectForm = ({
 };
 
 const ProjectBoard = ({
+  projectMetrics,
   projects,
   stages,
   onChanged,
   setMessage,
 }: {
   onChanged: () => void;
+  projectMetrics: WorkspaceData["projectMetrics"];
   projects: Project[];
   setMessage: (value: string) => void;
   stages: Stage[];
@@ -281,6 +507,7 @@ const ProjectBoard = ({
               <ProjectCard
                 key={project.id}
                 project={project}
+                metrics={projectMetrics[project.id]}
                 stages={stages}
                 onChanged={onChanged}
                 setMessage={setMessage}
@@ -292,11 +519,13 @@ const ProjectBoard = ({
 );
 
 const ProjectCard = ({
+  metrics,
   onChanged,
   project,
   setMessage,
   stages,
 }: {
+  metrics: WorkspaceData["projectMetrics"][string] | undefined;
   onChanged: () => void;
   project: Project;
   setMessage: (value: string) => void;
@@ -365,6 +594,12 @@ const ProjectCard = ({
   return (
     <article className="project-card">
       <h3>{project.name}</h3>
+      {metrics ? (
+        <p className="muted">
+          {metrics.allocatedHours}h · {Math.round(metrics.progressPercent)}% complete ·{" "}
+          {metrics.startDate ?? "No start date"} to {metrics.endDate ?? "No end date"}
+        </p>
+      ) : null}
       {project.description ? (
         <p>{project.description}</p>
       ) : (

@@ -398,6 +398,25 @@ export const taskChecklistItems = opsweaveSchema.table(
   ],
 );
 
+export const taskDependencies = opsweaveSchema.table(
+  "task_dependencies",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    dependsOnTaskId: uuid("depends_on_task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("task_dependencies_unique_idx").on(table.taskId, table.dependsOnTaskId),
+    index("task_dependencies_depends_on_idx").on(table.dependsOnTaskId),
+    check("task_dependencies_not_self", sql`${table.taskId} <> ${table.dependsOnTaskId}`),
+  ],
+);
+
 export const auditEvents = opsweaveSchema.table(
   "audit_events",
   {

@@ -27,3 +27,9 @@ The board offers three server-computed display modes. Manual mode persists a pos
 Writes use optimistic versions and return a safe conflict response when a current record has changed. Project ownership is validated before task assignment. An `ai_proposed` score cannot replace an owner-sourced score. Task, project, and stage changes emit redacted audit events without sensitive content.
 
 The browser API boundary is same-origin protected, parses bounded JSON payloads, and validates all inputs with the shared domain schemas. See [security](security.md) and [testing and validation](testing.md).
+
+## Dependencies and timeline
+
+Task dependencies are directed blocker edges: a task cannot be its own blocker, duplicate edges are rejected, and a transaction rejects any edge that would create a longer cycle. Deleting a task removes its edges. The workspace presents an accessible task timeline with day, week, month, three-month, six-month, and one-year scale choices; tasks without due dates are listed separately rather than placed on a misleading timeline.
+
+Project progress, allocated hours, and dates are derived from the project’s tasks. Progress is checklist-based and hour-weighted when allocated hours exist. The dependency inspector supports keyboard task selection, direct blocker inspection, add/remove controls, and a read-only Mermaid representation. Mermaid labels are escaped before export; the rendered graph is never the source of truth.

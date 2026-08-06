@@ -163,6 +163,15 @@ describe("database migrations and repositories", () => {
     const nextFirst = await store.listTasks(owner.workspaceId, "manual");
     const moved = nextFirst.find((task) => task.id === second.id);
     expect(moved?.workflowLane).toBe("today_1");
+    await store.createTaskDependency(owner.workspaceId, owner.ownerId, first.id, second.id);
+    expect(await store.listTaskDependencies(owner.workspaceId)).toContainEqual({
+      dependsOnTaskId: second.id,
+      taskId: first.id,
+    });
+    await expect(
+      store.createTaskDependency(owner.workspaceId, owner.ownerId, second.id, first.id),
+    ).rejects.toBeInstanceOf(StoreConflictError);
+    await store.removeTaskDependency(owner.workspaceId, owner.ownerId, first.id, second.id);
     await expect(
       store.updateTask(owner.workspaceId, owner.ownerId, first.id, {
         businessValueScore: 99,

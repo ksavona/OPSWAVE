@@ -18,6 +18,7 @@ OpsWeave is an early-stage personal operations workspace intended to turn unstru
 - General, working-time, fake-provider credential, prioritisation, and security settings.
 - Project and task CRUD, configurable project stages, a project Kanban, and an eleven-lane global task board.
 - Server-authoritative manual, planning-priority, and greatest-value board ordering with optimistic conflict handling and audit events.
+- Derived project metrics, cycle-safe task dependencies, an accessible timeline, and safe Mermaid dependency export.
 - AES-256-GCM credential persistence and a deterministic fake verification provider; no live provider adapter.
 - Unit, component, route, migration, browser, accessibility, secret-leak, license, build, and dependency-audit checks.
 - One full validation command shared by local development and CI.

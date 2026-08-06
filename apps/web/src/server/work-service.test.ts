@@ -14,6 +14,7 @@ const createStore = () => ({
     general: { defaultKanbanSort: "manual" as const },
   })),
   listProjectStages: vi.fn(async () => [{ id: "stage" }]),
+  listTaskDependencies: vi.fn(async () => []),
   listProjects: vi.fn(async () => [{ id: "project" }]),
   listTasks: vi.fn(async () => [{ id: "task" }]),
   moveTask: vi.fn(async () => ({ id: "task" })),
