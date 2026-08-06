@@ -5,6 +5,8 @@ export {
 } from "./credential-vault.ts";
 export {
   DeterministicFakeAiProvider,
+  type AiDraft,
+  type AiDraftTask,
   type AiExtractionRequest,
   type AiExtractionResult,
   type AiProvider,

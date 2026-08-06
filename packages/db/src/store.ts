@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type { Pool, PoolClient } from "pg";
 
@@ -179,6 +179,25 @@ export interface TaskRecord {
 export interface TaskDependencyRecord {
   readonly dependsOnTaskId: string;
   readonly taskId: string;
+}
+
+export interface IntakeSourceRecord {
+  readonly content: string;
+  readonly id: string;
+  readonly sourceType: "instruction" | "meeting_note" | "other_text" | "transcript";
+  readonly status: "completed" | "failed" | "processing" | "queued";
+}
+
+export interface IntakeRunRecord {
+  readonly id: string;
+  readonly sourceId: string;
+}
+
+export interface IntakeDraftRecord {
+  readonly id: string;
+  readonly proposal: unknown;
+  readonly sourceType: IntakeSourceRecord["sourceType"];
+  readonly status: "approved" | "declined" | "review_required" | "trashed";
 }
 
 export interface ProjectInput {
@@ -1419,6 +1438,246 @@ export class OpsWeaveStore {
         metadata: { dependsOnTaskId },
         targetId: taskId,
         targetType: "task",
+        workspaceId,
+      });
+    });
+  }
+
+  public async submitIntakeSource(
+    workspaceId: string,
+    ownerId: string,
+    input: { content: string; sourceType: IntakeSourceRecord["sourceType"] },
+  ): Promise<IntakeRunRecord> {
+    return transaction(this.pool, async (client) => {
+      const fingerprint = createHash("sha256").update(input.content).digest("hex");
+      const source = await client.query<{ id: string }>(
+        `INSERT INTO opsweave.intake_sources (workspace_id,source_type,content,content_fingerprint)
+         VALUES ($1,$2,$3,$4) RETURNING id`,
+        [workspaceId, input.sourceType, input.content, fingerprint],
+      );
+      const sourceId = source.rows[0]?.id;
+      if (sourceId === undefined) throw new Error("Intake source creation failed.");
+      const run = await client.query<IntakeRunRecord>(
+        `INSERT INTO opsweave.intake_runs (source_id,provider,schema_version) VALUES ($1,'deterministic-fake','2026-08-06')
+         RETURNING id,source_id AS "sourceId"`,
+        [sourceId],
+      );
+      const record = run.rows[0];
+      if (record === undefined) throw new Error("Intake run creation failed.");
+      await audit(client, {
+        action: "intake.submitted",
+        actorOwnerId: ownerId,
+        metadata: { sourceType: input.sourceType },
+        targetId: sourceId,
+        targetType: "intake_source",
+        workspaceId,
+      });
+      return record;
+    });
+  }
+
+  public async nextQueuedIntakeRun(): Promise<(IntakeRunRecord & IntakeSourceRecord) | null> {
+    return transaction(this.pool, async (client) => {
+      const result = await client.query<IntakeRunRecord & IntakeSourceRecord>(
+        `WITH next_run AS (SELECT id,source_id FROM opsweave.intake_runs WHERE status='queued' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1),
+         claimed AS (UPDATE opsweave.intake_runs run SET status='processing',updated_at=now() FROM next_run
+         WHERE run.id=next_run.id RETURNING run.id,run.source_id)
+         UPDATE opsweave.intake_sources source SET status='processing',updated_at=now() FROM claimed
+         WHERE source.id=claimed.source_id
+         RETURNING claimed.id,claimed.source_id AS "sourceId",source.id,source.content,source.source_type AS "sourceType",source.status`,
+      );
+      return result.rows[0] ?? null;
+    });
+  }
+
+  public async completeIntakeRun(runId: string, proposal: unknown): Promise<void> {
+    await transaction(this.pool, async (client) => {
+      const run = await client.query<{ sourceId: string }>(
+        `UPDATE opsweave.intake_runs SET status='completed',safe_error=NULL,updated_at=now()
+         WHERE id=$1 AND status='processing' RETURNING source_id AS "sourceId"`,
+        [runId],
+      );
+      const sourceId = run.rows[0]?.sourceId;
+      if (sourceId === undefined) throw new StoreConflictError("Intake run is unavailable.");
+      await client.query(
+        "INSERT INTO opsweave.intake_drafts (run_id,proposal) VALUES ($1,$2::jsonb)",
+        [runId, JSON.stringify(proposal)],
+      );
+      await client.query(
+        "UPDATE opsweave.intake_sources SET status='completed',updated_at=now() WHERE id=$1",
+        [sourceId],
+      );
+    });
+  }
+
+  public async failIntakeRun(runId: string, safeError: string): Promise<void> {
+    await transaction(this.pool, async (client) => {
+      const run = await client.query<{ sourceId: string }>(
+        `UPDATE opsweave.intake_runs SET status='failed',safe_error=$2,updated_at=now()
+         WHERE id=$1 AND status='processing' RETURNING source_id AS "sourceId"`,
+        [runId, safeError.slice(0, 500)],
+      );
+      const sourceId = run.rows[0]?.sourceId;
+      if (sourceId === undefined) return;
+      await client.query(
+        "UPDATE opsweave.intake_sources SET status='failed',updated_at=now() WHERE id=$1",
+        [sourceId],
+      );
+    });
+  }
+
+  public async listIntakeDrafts(workspaceId: string): Promise<IntakeDraftRecord[]> {
+    const result = await this.pool.query<IntakeDraftRecord>(
+      `SELECT draft.id,draft.proposal,draft.status,source.source_type AS "sourceType"
+       FROM opsweave.intake_drafts draft
+       JOIN opsweave.intake_runs run ON run.id=draft.run_id
+       JOIN opsweave.intake_sources source ON source.id=run.source_id
+       WHERE source.workspace_id=$1 ORDER BY draft.created_at DESC`,
+      [workspaceId],
+    );
+    return result.rows;
+  }
+
+  public async approveIntakeDraft(
+    workspaceId: string,
+    ownerId: string,
+    draftId: string,
+  ): Promise<void> {
+    await transaction(this.pool, async (client) => {
+      const draft = await client.query<{ proposal: { tasks?: TaskInput[] } }>(
+        `SELECT draft.proposal FROM opsweave.intake_drafts draft
+         JOIN opsweave.intake_runs run ON run.id=draft.run_id
+         JOIN opsweave.intake_sources source ON source.id=run.source_id
+         WHERE draft.id=$1 AND source.workspace_id=$2 AND draft.status='review_required' FOR UPDATE`,
+        [draftId, workspaceId],
+      );
+      const proposal = draft.rows[0]?.proposal;
+      if (proposal === undefined) throw new StoreConflictError("Intake draft is unavailable.");
+      for (const task of proposal.tasks ?? []) {
+        await client.query(
+          `INSERT INTO opsweave.tasks (workspace_id,title,workflow_lane,business_value_score,business_value_rationale,value_source,manual_lane_position)
+           VALUES ($1,$2,'inbox',$3,$4,'ai_proposed',(SELECT coalesce(max(manual_lane_position),0)+1 FROM opsweave.tasks WHERE workspace_id=$1 AND workflow_lane='inbox'))`,
+          [
+            workspaceId,
+            task.title,
+            task.businessValueScore ?? null,
+            task.businessValueRationale ?? null,
+          ],
+        );
+      }
+      await client.query(
+        "UPDATE opsweave.intake_drafts SET status='approved',updated_at=now() WHERE id=$1",
+        [draftId],
+      );
+      await audit(client, {
+        action: "intake.draft.approved",
+        actorOwnerId: ownerId,
+        metadata: { taskCount: proposal.tasks?.length ?? 0 },
+        targetId: draftId,
+        targetType: "intake_draft",
+        workspaceId,
+      });
+    });
+  }
+
+  public async declineIntakeDraft(
+    workspaceId: string,
+    ownerId: string,
+    draftId: string,
+  ): Promise<void> {
+    await transaction(this.pool, async (client) => {
+      const result = await client.query(
+        `UPDATE opsweave.intake_drafts draft SET status='declined',updated_at=now()
+         FROM opsweave.intake_runs run JOIN opsweave.intake_sources source ON source.id=run.source_id
+         WHERE draft.id=$1 AND draft.run_id=run.id AND source.workspace_id=$2 AND draft.status='review_required'`,
+        [draftId, workspaceId],
+      );
+      if (result.rowCount !== 1) throw new StoreConflictError("Intake draft is unavailable.");
+      await audit(client, {
+        action: "intake.draft.declined",
+        actorOwnerId: ownerId,
+        metadata: {},
+        targetId: draftId,
+        targetType: "intake_draft",
+        workspaceId,
+      });
+    });
+  }
+
+  public async retryIntakeRun(workspaceId: string, ownerId: string, runId: string): Promise<void> {
+    await transaction(this.pool, async (client) => {
+      const result = await client.query(
+        `UPDATE opsweave.intake_runs run SET status='queued',safe_error=NULL,updated_at=now()
+         FROM opsweave.intake_sources source
+         WHERE run.id=$1 AND run.source_id=source.id AND source.workspace_id=$2 AND run.status='failed'`,
+        [runId, workspaceId],
+      );
+      if (result.rowCount !== 1) throw new StoreConflictError("Intake run cannot be retried.");
+      await audit(client, {
+        action: "intake.retry_queued",
+        actorOwnerId: ownerId,
+        metadata: {},
+        targetId: runId,
+        targetType: "intake_run",
+        workspaceId,
+      });
+    });
+  }
+
+  public async trashIntakeDraft(
+    workspaceId: string,
+    ownerId: string,
+    draftId: string,
+  ): Promise<void> {
+    await transaction(this.pool, async (client) => {
+      const result = await client.query(
+        `UPDATE opsweave.intake_drafts draft SET status='trashed',updated_at=now()
+         FROM opsweave.intake_runs run JOIN opsweave.intake_sources source ON source.id=run.source_id
+         WHERE draft.id=$1 AND draft.run_id=run.id AND source.workspace_id=$2 AND draft.status IN ('declined','approved')`,
+        [draftId, workspaceId],
+      );
+      if (result.rowCount !== 1)
+        throw new StoreConflictError("Intake draft cannot be moved to trash.");
+      await client.query(
+        `INSERT INTO opsweave.trash_records (workspace_id,entity_type,entity_id,purge_after)
+         VALUES ($1,'intake_draft',$2,now()+interval '30 days')
+         ON CONFLICT (workspace_id,entity_type,entity_id) DO UPDATE SET deleted_at=now(),purge_after=excluded.purge_after`,
+        [workspaceId, draftId],
+      );
+      await audit(client, {
+        action: "intake.draft.trashed",
+        actorOwnerId: ownerId,
+        metadata: { retentionDays: 30 },
+        targetId: draftId,
+        targetType: "intake_draft",
+        workspaceId,
+      });
+    });
+  }
+
+  public async restoreIntakeDraft(
+    workspaceId: string,
+    ownerId: string,
+    draftId: string,
+  ): Promise<void> {
+    await transaction(this.pool, async (client) => {
+      const result = await client.query(
+        `UPDATE opsweave.intake_drafts draft SET status='review_required',updated_at=now()
+         FROM opsweave.intake_runs run JOIN opsweave.intake_sources source ON source.id=run.source_id
+         WHERE draft.id=$1 AND draft.run_id=run.id AND source.workspace_id=$2 AND draft.status='trashed'`,
+        [draftId, workspaceId],
+      );
+      if (result.rowCount !== 1) throw new StoreConflictError("Intake draft cannot be restored.");
+      await client.query(
+        "DELETE FROM opsweave.trash_records WHERE workspace_id=$1 AND entity_type='intake_draft' AND entity_id=$2",
+        [workspaceId, draftId],
+      );
+      await audit(client, {
+        action: "intake.draft.restored",
+        actorOwnerId: ownerId,
+        metadata: {},
+        targetId: draftId,
+        targetType: "intake_draft",
         workspaceId,
       });
     });

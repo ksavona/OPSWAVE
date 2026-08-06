@@ -44,6 +44,14 @@ export {
   type WorkingTimeSettingsInput,
 } from "./settings.ts";
 export {
+  INTAKE_SCHEMA_VERSION,
+  draftTaskSchema,
+  intakeDraftSchema,
+  intakeSubmissionSchema,
+  type IntakeDraft,
+  type IntakeSubmission,
+} from "./intake.ts";
+export {
   KANBAN_SORT_MODES,
   TASK_SIZES,
   VALUE_SCORE_SOURCES,

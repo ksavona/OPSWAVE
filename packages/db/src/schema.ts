@@ -456,6 +456,74 @@ export const trashRecords = opsweaveSchema.table(
   ],
 );
 
+export const intakeSources = opsweaveSchema.table(
+  "intake_sources",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    sourceType: varchar("source_type", { length: 32 }).notNull(),
+    content: text("content").notNull(),
+    contentFingerprint: varchar("content_fingerprint", { length: 64 }).notNull(),
+    status: varchar("status", { length: 32 }).notNull().default("queued"),
+    ...timestamps,
+  },
+  (table) => [
+    index("intake_sources_workspace_created_idx").on(table.workspaceId, table.createdAt),
+    check(
+      "intake_sources_type",
+      sql`${table.sourceType} in ('instruction', 'meeting_note', 'other_text', 'transcript')`,
+    ),
+    check(
+      "intake_sources_status",
+      sql`${table.status} in ('queued', 'processing', 'completed', 'failed')`,
+    ),
+  ],
+);
+
+export const intakeRuns = opsweaveSchema.table(
+  "intake_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => intakeSources.id, { onDelete: "cascade" }),
+    provider: varchar("provider", { length: 64 }).notNull(),
+    schemaVersion: varchar("schema_version", { length: 32 }).notNull(),
+    status: varchar("status", { length: 32 }).notNull().default("queued"),
+    safeError: varchar("safe_error", { length: 500 }),
+    ...timestamps,
+  },
+  (table) => [
+    index("intake_runs_source_created_idx").on(table.sourceId, table.createdAt),
+    check(
+      "intake_runs_status",
+      sql`${table.status} in ('queued', 'processing', 'completed', 'failed')`,
+    ),
+  ],
+);
+
+export const intakeDrafts = opsweaveSchema.table(
+  "intake_drafts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => intakeRuns.id, { onDelete: "cascade" }),
+    proposal: jsonb("proposal").notNull(),
+    status: varchar("status", { length: 32 }).notNull().default("review_required"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("intake_drafts_run_idx").on(table.runId),
+    check(
+      "intake_drafts_status",
+      sql`${table.status} in ('review_required', 'approved', 'declined', 'trashed')`,
+    ),
+  ],
+);
+
 export const planningRuns = opsweaveSchema.table(
   "planning_runs",
   {

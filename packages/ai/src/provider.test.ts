@@ -15,6 +15,7 @@ describe("DeterministicFakeAiProvider", () => {
 
     expect(first).toEqual(second);
     expect(first).toMatchObject({
+      draft: { tasks: [{ confidence: 0.5, title: "Synthetic intake content." }] },
       provider: "deterministic-fake",
       schemaVersion: "foundation-v1",
       summary: "Synthetic intake content.",

@@ -2,7 +2,11 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "rootDir": "src"
+    "paths": {
+      "@opsweave/ai": ["../../packages/ai/dist/index.d.ts"],
+      "@opsweave/db": ["../../packages/db/dist/index.d.ts"],
+      "@opsweave/domain": ["../../packages/domain/dist/index.d.ts"]
+    }
   },
   "include": ["src/**/*.ts"]
 }

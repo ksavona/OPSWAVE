@@ -6,19 +6,20 @@
 OpsWeave is an early-stage personal operations workspace intended to turn unstructured work into structured, reviewable projects and tasks. The project is a public example of disciplined AI engineering, operational design, governance, testing, and maintainable software delivery.
 
 > [!IMPORTANT]
-> Phase 2 adds the private project and task workspace. AI intake, planning automation, reporting, and supported production deployment remain out of scope.
+> Phase 4 adds owner-reviewed deterministic AI intake. Live AI providers, planning automation, reporting, and supported production deployment remain out of scope.
 
 ## What exists
 
 - A pinned Node.js and pnpm TypeScript monorepo.
 - A private Next.js owner shell with server-side sessions and a non-sensitive health endpoint.
-- A background-worker scaffold with structured, redacted logging and no registered jobs.
+- A durable PostgreSQL-backed worker that safely processes deterministic AI intake jobs.
 - A PostgreSQL 18.4 schema with owner, session, settings, encrypted credential, audit, and future workflow foundations.
 - Local-only owner bootstrap/recovery, Argon2id password hashing, revocable opaque sessions, and durable rate limits.
 - General, working-time, fake-provider credential, prioritisation, and security settings.
 - Project and task CRUD, configurable project stages, a project Kanban, and an eleven-lane global task board.
 - Server-authoritative manual, planning-priority, and greatest-value board ordering with optimistic conflict handling and audit events.
 - Derived project metrics, cycle-safe task dependencies, an accessible timeline, and safe Mermaid dependency export.
+- Immutable intake source records, versioned extraction schema, source-span provenance, confidence, and explicit owner approval before proposed tasks reach Inbox.
 - AES-256-GCM credential persistence and a deterministic fake verification provider; no live provider adapter.
 - Unit, component, route, migration, browser, accessibility, secret-leak, license, build, and dependency-audit checks.
 - One full validation command shared by local development and CI.
@@ -29,7 +30,7 @@ Live AI access is disabled by default and is not required by development, tests,
 
 ```text
 apps/web       Private owner UI and protected server boundary
-apps/worker    Durable background-work boundary (no live jobs yet)
+apps/worker    Durable PostgreSQL-backed intake extraction worker
 packages/ai    Provider and encrypted-credential boundaries
 packages/db    PostgreSQL schema, migrations, and connection factory
 packages/domain
@@ -91,6 +92,7 @@ The HTML coverage report is written to `coverage/index.html`. See [testing and v
 - [Authentication and owner access](docs/authentication.md)
 - [Settings](docs/settings.md)
 - [Projects and tasks](docs/projects-and-tasks.md)
+- [AI intake](docs/intake.md)
 - [Security and threat model](docs/security.md)
 - [Testing and validation](docs/testing.md)
 - [Deployment assumptions](docs/deployment.md)

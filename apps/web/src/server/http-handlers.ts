@@ -11,14 +11,17 @@ import {
 } from "./request-security";
 import { getStore, logger } from "./runtime";
 import { SettingsService } from "./settings-service";
+import { IntakeService } from "./intake-service";
 import { WorkService } from "./work-service";
 
 let authService: AuthService | undefined;
 let settingsService: SettingsService | undefined;
 let workService: WorkService | undefined;
+let intakeService: IntakeService | undefined;
 const auth = () => (authService ??= new AuthService(getStore(), createRateLimitGate()));
 const settings = () => (settingsService ??= new SettingsService(getStore()));
 const work = () => (workService ??= new WorkService(getStore()));
+const intake = () => (intakeService ??= new IntakeService(getStore()));
 
 const json = (body: unknown, status = 200, headers?: HeadersInit) =>
   Response.json(body, { status, ...(headers === undefined ? {} : { headers }) });
@@ -194,6 +197,28 @@ export const workspaceHandler = (request: Request) =>
     return json(await work().readWorkspace(session, sort));
   });
 
+export const intakeHandler = (request: Request) =>
+  run(async () => {
+    const session = await requireSession(request);
+    if (request.method === "GET") return json(await intake().list(session));
+    assertSameOrigin(request);
+    return json(await intake().submit(session, await body(request)), 202);
+  });
+
+export const approveIntakeDraftHandler = (request: Request, draftId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await intake().approve(await requireSession(request), draftId);
+    return json({ approved: true });
+  });
+
+export const declineIntakeDraftHandler = (request: Request, draftId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await intake().decline(await requireSession(request), draftId);
+    return json({ declined: true });
+  });
+
 export const createProjectHandler = (request: Request) =>
   run(async () => {
     assertSameOrigin(request);
@@ -285,14 +310,17 @@ export const resetHttpServicesForTests = () => {
   authService = undefined;
   settingsService = undefined;
   workService = undefined;
+  intakeService = undefined;
 };
 
 export const configureHttpServicesForTests = (services: {
   readonly auth?: AuthService;
   readonly settings?: SettingsService;
   readonly work?: WorkService;
+  readonly intake?: IntakeService;
 }) => {
   authService = services.auth;
   settingsService = services.settings;
   workService = services.work;
+  intakeService = services.intake;
 };

@@ -37,13 +37,13 @@ Start the web process:
 pnpm dev
 ```
 
-The worker is currently a non-operational scaffold:
+Start the worker to drain and poll the durable intake queue:
 
 ```bash
 pnpm dev:worker
 ```
 
-It must not be described as processing jobs until job handlers and durable queueing are implemented and tested.
+The worker requires `DATABASE_URL`. It uses the deterministic provider in this phase; no provider credential is read or logged by the worker.
 
 `pnpm owner:bootstrap` securely prompts for the only owner and refuses replay. It is deliberately local-only: there is no registration or setup route. Use `pnpm owner:recover` from the host if the owner password is lost; recovery preserves workspace data and revokes every session.
 

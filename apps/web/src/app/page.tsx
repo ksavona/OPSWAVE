@@ -28,6 +28,7 @@ export default async function HomePage({
         </div>
         <nav aria-label="Primary navigation">
           <Link href="/settings">Settings</Link>
+          <Link href="/intake">Intake</Link>
           <LogoutButton />
         </nav>
       </header>

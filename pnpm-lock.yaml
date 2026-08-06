@@ -110,6 +110,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@opsweave/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@opsweave/db':
         specifier: workspace:*
         version: link:../../packages/db

@@ -2,7 +2,7 @@
 
 ## Status
 
-OpsWeave is a Phase 1 modular monolith. Single-owner authentication, protected settings, encrypted fake-provider credential persistence, audit foundations, migration tooling, and automated checks are implemented. Project/task and planning workflows are not.
+OpsWeave is a Phase 4 modular monolith. It has single-owner authentication, protected settings, project and task boards, dependency metrics, immutable intake sources, durable extraction runs, and owner-approved AI task proposals.
 
 ## Modules
 
@@ -34,7 +34,9 @@ A TLS-terminating reverse proxy is outside the repository foundation. The web an
 3. Every protected page and endpoint validates the database session. Mutations also validate origin and optimistic settings versions.
 4. Settings persist general preferences, seven working-day rows, prioritisation policy, and an optional AES-256-GCM credential envelope.
 5. Provider verification uses only a deterministic fake. The browser receives status, never credential plaintext.
-6. Security and settings changes write redacted audit metadata. The worker still has no registered jobs.
+6. An authenticated owner submits an intake source. The web process stores it with a fingerprint and queues a PostgreSQL-backed run without writing source text to audit metadata.
+7. The worker claims one queued run with `FOR UPDATE SKIP LOCKED`, validates deterministic provider output against the versioned intake schema, and stores a review-required draft. Source text stays within the worker boundary.
+8. Only explicit owner approval creates AI-proposed Inbox tasks; decline is audited. AI output never publishes directly to the board.
 
 ## Trust boundaries
 
@@ -61,4 +63,4 @@ packages/* must not depend on apps/*
 
 ## Unimplemented boundaries
 
-Project/task behavior, delegated access, queues, schedules, live providers, audit browsing, retention jobs, exercised backups, and production containers remain planned. Schema foundations for some later concepts do not imply usable product behavior.
+Delegated access, schedules, live providers, intake retry/restore/purge controls, audit browsing, exercised backups, and production containers remain planned.

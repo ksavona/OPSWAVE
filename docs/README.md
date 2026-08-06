@@ -9,6 +9,7 @@ This directory contains durable public documentation for OpsWeave. Documents des
 - [Environment configuration](environment.md)
 - [Authentication and owner access](authentication.md)
 - [Settings](settings.md)
+- [AI intake](intake.md)
 - [Testing and validation](testing.md)
 - [Security and threat model](security.md)
 - [Deployment assumptions](deployment.md)

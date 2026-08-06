@@ -12,6 +12,7 @@
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@opsweave/ai": "workspace:*",
     "@opsweave/db": "workspace:*",
     "@opsweave/domain": "workspace:*",
     "pino": "10.3.1"
