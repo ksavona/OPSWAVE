@@ -100,27 +100,30 @@ export const taskPlanningEligibility = (
   planningDate: string,
   allowedLanes: ReadonlySet<string> = new Set(["inbox", "this_week"]),
 ): EligibilityResult => {
-  const reason = !allowedLanes.has(task.workflowLane)
-    ? "stage_not_eligible"
-    : terminalTaskLanes.has(task.workflowLane)
-      ? "completed_or_cancelled"
-      : task.status === "on_hold"
-        ? "on_hold"
-        : !task.planningEligible
-          ? "planning_disabled"
-          : task.scheduleLocked
-            ? "schedule_locked"
-            : task.startDate !== null && task.startDate > planningDate
-              ? "start_date_not_arrived"
-              : blockedTaskIds.has(task.id)
-                ? "blocked"
-                : task.allocatedHours === null
-                  ? "effort_not_set"
-                  : task.hoursLeft <= 0
-                    ? "no_remaining_effort"
-                    : task.size === "mega" || task.requiresBreakdown
-                      ? "requires_breakdown"
-                      : null;
+  const reason =
+    task.externallyAssigned === true && task.ownerWorkAssigned !== true
+      ? "delegated_external_capacity"
+      : !allowedLanes.has(task.workflowLane)
+        ? "stage_not_eligible"
+        : terminalTaskLanes.has(task.workflowLane)
+          ? "completed_or_cancelled"
+          : task.status === "on_hold"
+            ? "on_hold"
+            : !task.planningEligible
+              ? "planning_disabled"
+              : task.scheduleLocked
+                ? "schedule_locked"
+                : task.startDate !== null && task.startDate > planningDate
+                  ? "start_date_not_arrived"
+                  : blockedTaskIds.has(task.id)
+                    ? "blocked"
+                    : task.allocatedHours === null
+                      ? "effort_not_set"
+                      : task.hoursLeft <= 0
+                        ? "no_remaining_effort"
+                        : task.size === "mega" || task.requiresBreakdown
+                          ? "requires_breakdown"
+                          : null;
   return { eligible: reason === null, reason };
 };
 

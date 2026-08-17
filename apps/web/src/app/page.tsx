@@ -9,13 +9,11 @@ import { WorkService } from "../server/work-service";
 export default async function HomePage({
   searchParams,
 }: {
-  searchParams: Promise<{ sort?: string }>;
+  searchParams: Promise<{ project?: string; sort?: string; task?: string }>;
 }) {
   const session = await getCurrentSession();
-  const workspace = await new WorkService(getStore()).readWorkspace(
-    session,
-    (await searchParams).sort,
-  );
+  const parameters = await searchParams;
+  const workspace = await new WorkService(getStore()).readWorkspace(session, parameters.sort);
   const initial = JSON.parse(JSON.stringify(workspace)) as Parameters<
     typeof Workspace
   >[0]["initial"];
@@ -27,12 +25,24 @@ export default async function HomePage({
           <p className="owner-label">Signed in as {session.username}</p>
         </div>
         <nav aria-label="Primary navigation">
+          <Link href="/delegations">Delegations</Link>
+          <Link href="/notifications">Notifications</Link>
+          <Link href="/compliance">Compliance</Link>
           <Link href="/settings">Settings</Link>
           <Link href="/intake">Intake</Link>
           <LogoutButton />
         </nav>
       </header>
-      <Workspace initial={initial} />
+      <Workspace
+        initial={initial}
+        initialOpenRecord={
+          typeof parameters.task === "string"
+            ? { id: parameters.task, type: "task" }
+            : typeof parameters.project === "string"
+              ? { id: parameters.project, type: "project" }
+              : null
+        }
+      />
     </main>
   );
 }

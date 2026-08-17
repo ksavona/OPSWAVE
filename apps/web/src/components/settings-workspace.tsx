@@ -6,7 +6,8 @@ import { ProjectStageSettings } from "./project-stage-settings";
 import { automationRunMessage } from "./workspace-api";
 import type { Stage } from "./workspace-types";
 
-type Section = "general" | "working-time" | "projects" | "ai" | "prioritization" | "security";
+type Section =
+  "general" | "working-time" | "projects" | "ai" | "prioritization" | "collaboration" | "security";
 type SaveState = "idle" | "unsaved" | "saving" | "saved" | "conflict" | "error";
 
 interface SettingsData {
@@ -58,6 +59,7 @@ const sections: [Section, string][] = [
   ["projects", "Projects"],
   ["ai", "AI"],
   ["prioritization", "Prioritisation"],
+  ["collaboration", "Collaboration"],
   ["security", "Security"],
 ];
 
@@ -105,10 +107,17 @@ const workdayHours = (startTime: string, endTime: string): number => {
 const nullableOwnerName = (value: string): string | null => (value.length === 0 ? null : value);
 
 export const SettingsWorkspace = ({
+  initialCollaboration = {
+    complianceMonitorEnabled: false,
+    delegateUploadsEnabled: false,
+    invitationEmailEnabled: false,
+    multiUserEnabled: false,
+  },
   initial,
   stages = [],
 }: {
   initial: SettingsData;
+  initialCollaboration?: CollaborationFlags;
   stages?: Stage[];
 }) => {
   const [active, setActive] = useState<Section>("general");
@@ -194,12 +203,109 @@ export const SettingsWorkspace = ({
             setState={setState}
           />
         ) : null}
+        {active === "collaboration" ? (
+          <CollaborationSection
+            initial={initialCollaboration}
+            setMessage={setMessage}
+            setState={setState}
+          />
+        ) : null}
         {active === "security" ? (
           <SecuritySection setMessage={setMessage} setState={setState} />
         ) : null}
         <FormStatus message={message} state={state} />
       </div>
     </div>
+  );
+};
+
+interface CollaborationFlags {
+  complianceMonitorEnabled: boolean;
+  delegateUploadsEnabled: boolean;
+  invitationEmailEnabled: boolean;
+  multiUserEnabled: boolean;
+}
+
+const CollaborationSection = ({
+  initial,
+  setMessage,
+  setState,
+}: {
+  initial: CollaborationFlags;
+  setMessage: (message: string) => void;
+  setState: (state: SaveState) => void;
+}) => {
+  const [flags, setFlags] = useState(initial);
+  const toggle = (field: keyof CollaborationFlags, checked: boolean) => {
+    setFlags((current) => ({ ...current, [field]: checked }));
+    setState("unsaved");
+  };
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        setState("saving");
+        void request("/api/settings/collaboration", "PUT", flags)
+          .then((response) => {
+            if (response.flags !== null && typeof response.flags === "object")
+              setFlags(response.flags as unknown as CollaborationFlags);
+            setState("saved");
+          })
+          .catch((error: unknown) => {
+            setMessage(
+              error instanceof Error ? error.message : "Unable to save collaboration settings.",
+            );
+            setState("error");
+          });
+      }}
+    >
+      <h2>Collaboration</h2>
+      <p>
+        Feature gates fail closed. Email and uploads require their deployment services before they
+        can operate.
+      </p>
+      <label className="checkbox-row">
+        <input
+          checked={flags.multiUserEnabled}
+          onChange={(event) => {
+            toggle("multiUserEnabled", event.target.checked);
+          }}
+          type="checkbox"
+        />
+        Enable delegated user access
+      </label>
+      <label className="checkbox-row">
+        <input
+          checked={flags.invitationEmailEnabled}
+          onChange={(event) => {
+            toggle("invitationEmailEnabled", event.target.checked);
+          }}
+          type="checkbox"
+        />
+        Queue invitation emails (requires encryption key and email transport)
+      </label>
+      <label className="checkbox-row">
+        <input
+          checked={flags.delegateUploadsEnabled}
+          onChange={(event) => {
+            toggle("delegateUploadsEnabled", event.target.checked);
+          }}
+          type="checkbox"
+        />
+        Allow delegate uploads (requires configured malware scanner)
+      </label>
+      <label className="checkbox-row">
+        <input
+          checked={flags.complianceMonitorEnabled}
+          onChange={(event) => {
+            toggle("complianceMonitorEnabled", event.target.checked);
+          }}
+          type="checkbox"
+        />
+        Enable owner-only compliance monitoring
+      </label>
+      <button type="submit">Save Collaboration settings</button>
+    </form>
   );
 };
 

@@ -272,17 +272,27 @@ describe("Workspace", () => {
   it("shows audit history and filters a type-ahead blocker list", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      if (url.endsWith("/api/tasks/task/audit"))
+      if (url.includes("/api/activity/participants")) {
+        return new Response(JSON.stringify({ participants: [] }), { status: 200 });
+      }
+      if (url.includes("/api/activity?"))
         return new Response(
-          JSON.stringify([
-            {
-              action: "task.moved",
-              actorName: "Owner",
-              createdAt: "2026-08-11T10:00:00.000Z",
-              id: "audit",
-              metadata: { changes: { workflowLane: { from: "inbox", to: "today" } } },
-            },
-          ]),
+          JSON.stringify({
+            events: [
+              {
+                action: "task.moved",
+                actorDisplay: "Owner",
+                body: null,
+                category: "status",
+                contentStatus: null,
+                createdAt: "2026-08-11T10:00:00.000Z",
+                id: "audit",
+                kind: null,
+                metadata: { changes: { workflowLane: { from: "inbox", to: "today" } } },
+                userGenerated: false,
+              },
+            ],
+          }),
           { status: 200 },
         );
       return new Response(JSON.stringify(initial), { status: 200 });

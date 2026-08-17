@@ -1,8 +1,10 @@
-import { createDatabasePool, OpsWeaveStore } from "@opsweave/db";
+import { CollaborationStore, createDatabasePool, OpsWeaveStore } from "@opsweave/db";
 import pino from "pino";
 
 const globalRuntime = globalThis as typeof globalThis & {
   opsWeaveStore?: OpsWeaveStore;
+  opsWeaveCollaborationStore?: CollaborationStore;
+  opsWeavePool?: ReturnType<typeof createDatabasePool>;
 };
 
 export const logger = pino({
@@ -29,6 +31,19 @@ export const getStore = (): OpsWeaveStore => {
   if (databaseUrl === undefined || databaseUrl.length === 0) {
     throw new Error("DATABASE_URL is required at runtime.");
   }
-  globalRuntime.opsWeaveStore = new OpsWeaveStore(createDatabasePool(databaseUrl));
+  globalRuntime.opsWeavePool ??= createDatabasePool(databaseUrl);
+  globalRuntime.opsWeaveStore = new OpsWeaveStore(globalRuntime.opsWeavePool);
   return globalRuntime.opsWeaveStore;
+};
+
+export const getCollaborationStore = (): CollaborationStore => {
+  if (globalRuntime.opsWeaveCollaborationStore !== undefined)
+    return globalRuntime.opsWeaveCollaborationStore;
+  const databaseUrl = process.env.DATABASE_URL;
+  if (databaseUrl === undefined || databaseUrl.length === 0) {
+    throw new Error("DATABASE_URL is required at runtime.");
+  }
+  globalRuntime.opsWeavePool ??= createDatabasePool(databaseUrl);
+  globalRuntime.opsWeaveCollaborationStore = new CollaborationStore(globalRuntime.opsWeavePool);
+  return globalRuntime.opsWeaveCollaborationStore;
 };

@@ -13,8 +13,10 @@ import {
 } from "react";
 
 import { GanttChart } from "./gantt-chart";
+import { ActivityTimeline } from "./activity-timeline";
 import { MermaidDiagram } from "./mermaid-diagram";
 import { RichTextEditor } from "./rich-text-editor";
+import { SubjectDelegationsPanel } from "./subject-delegations-panel";
 import {
   WORKFLOW_LANES,
   WORK_STATUSES,
@@ -70,20 +72,6 @@ const EntityDialog = ({
   );
 };
 
-interface AuditEvent {
-  action: string;
-  actorName: string | null;
-  createdAt: string;
-  id: string;
-  metadata: unknown;
-}
-
-const humanize = (value: string): string =>
-  value
-    .replaceAll(/([a-z])([A-Z])/gu, "$1 $2")
-    .replaceAll(/[._]/gu, " ")
-    .replace(/^./u, (character) => character.toUpperCase());
-
 const priorityLevelLabel = (value: number): string =>
   ["Lowest priority", "Low priority", "Medium priority", "High priority", "Highest priority"][
     value - 1
@@ -92,114 +80,6 @@ const priorityLevelLabel = (value: number): string =>
 const clientNameValue = (value: FormDataEntryValue | null): string | null => {
   const name = optionalFormText(value);
   return name?.toLocaleLowerCase() === "personal" ? null : name;
-};
-
-const AuditPanel = ({
-  data,
-  entityId,
-  entityType,
-  version,
-}: {
-  data: WorkspaceData;
-  entityId: string;
-  entityType: "project" | "task";
-  version: number;
-}) => {
-  const [events, setEvents] = useState<AuditEvent[]>([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    void workspaceRequest(`/api/${entityType}s/${entityId}/audit`, "GET")
-      .then((value) => {
-        if (active) setEvents(Array.isArray(value) ? (value as AuditEvent[]) : []);
-      })
-      .catch(() => {
-        if (active) setEvents([]);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [entityId, entityType, version]);
-  const displayValue = (field: string, value: unknown): string => {
-    if (value === null || value === undefined || value === "") return "Not set";
-    if (field === "workflowLane" && typeof value === "string")
-      return WORKFLOW_LANES.includes(value as WorkflowLane)
-        ? workflowLaneLabel(value as WorkflowLane)
-        : value;
-    if (field === "projectId" && typeof value === "string")
-      return data.projects.find((project) => project.id === value)?.name ?? value;
-    if (field === "stageId" && typeof value === "string")
-      return data.stages.find((stage) => stage.id === value)?.name ?? value;
-    if (field === "blockerId" && typeof value === "string")
-      return (
-        data.tasks.find((task) => task.id === value)?.title ??
-        data.projects.find((project) => project.id === value)?.name ??
-        value
-      );
-    if (Array.isArray(value)) return `${String(value.length)} item${value.length === 1 ? "" : "s"}`;
-    if (typeof value === "object") return "Updated";
-    if (typeof value === "boolean") return value ? "Yes" : "No";
-    if (typeof value === "string") return value;
-    if (typeof value === "number" || typeof value === "bigint") return value.toString();
-    return "Updated";
-  };
-  return (
-    <aside aria-label="Record audit log" className="audit-panel">
-      <div className="audit-panel-heading">
-        <p className="eyebrow">History</p>
-        <h3>Audit log</h3>
-      </div>
-      {loading ? <p className="muted">Loading history…</p> : null}
-      {!loading && events.length === 0 ? <p className="muted">No recorded changes yet.</p> : null}
-      <ol className="audit-timeline">
-        {events.map((event) => {
-          const metadata =
-            event.metadata !== null && typeof event.metadata === "object"
-              ? (event.metadata as Record<string, unknown>)
-              : {};
-          const changes =
-            metadata.changes !== null && typeof metadata.changes === "object"
-              ? (metadata.changes as Record<string, { from?: unknown; to?: unknown }>)
-              : {};
-          const details =
-            Object.keys(changes).length > 0
-              ? Object.entries(changes).map(([field, change]) => ({
-                  field,
-                  text: `${displayValue(field, change.from)} → ${displayValue(field, change.to)}`,
-                }))
-              : Object.entries(metadata)
-                  .filter(([field]) => field !== "changes")
-                  .map(([field, value]) => ({ field, text: displayValue(field, value) }));
-          return (
-            <li key={event.id}>
-              <strong>{humanize(event.action.replace(`${entityType}.`, ""))}</strong>
-              <time dateTime={event.createdAt}>
-                {new Intl.DateTimeFormat("en", {
-                  dateStyle: "medium",
-                  timeStyle: "short",
-                }).format(new Date(event.createdAt))}
-              </time>
-              <span className="muted">by {event.actorName ?? "System"}</span>
-              {details.length === 0 ? null : (
-                <dl>
-                  {details.map((detail) => (
-                    <div key={detail.field}>
-                      <dt>{humanize(detail.field)}</dt>
-                      <dd>{detail.text}</dd>
-                    </div>
-                  ))}
-                </dl>
-              )}
-            </li>
-          );
-        })}
-      </ol>
-    </aside>
-  );
 };
 
 const ModalHeader = ({ onClose, title }: { onClose: () => void; title: string }) => (
@@ -241,11 +121,27 @@ const Tabs = ({
 );
 
 interface AttachmentView {
+  approvalStatus: "approved" | "draft" | "rejected";
   byteSize: number;
   createdAt: string;
+  delegateSafeName: string | null;
+  displayName: string;
   id: string;
-  originalName: string;
+  originalAttachmentId: string | null;
   purgeAfter: string | null;
+  scanStatus: string;
+  selectedUserIds: string[];
+  visibility:
+    | "internal_only"
+    | "redacted_delegate_copy"
+    | "shared_all_delegates"
+    | "shared_selected_delegates";
+}
+
+interface DocumentDelegateChoice {
+  email: string;
+  id: string;
+  label: string;
 }
 
 const DocumentsPanel = ({
@@ -259,13 +155,40 @@ const DocumentsPanel = ({
 }) => {
   const [attachments, setAttachments] = useState<AttachmentView[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadVisibility, setUploadVisibility] =
+    useState<AttachmentView["visibility"]>("internal_only");
+  const [delegateSafeName, setDelegateSafeName] = useState("");
+  const [originalAttachmentId, setOriginalAttachmentId] = useState("");
+  const [delegateChoices, setDelegateChoices] = useState<DocumentDelegateChoice[]>([]);
+  const [uploadSelectedUserIds, setUploadSelectedUserIds] = useState<string[]>([]);
   const load = async () => {
-    const response = await fetch(`/api/${entityType}s/${entityId}/attachments`, {
-      cache: "no-store",
-    });
-    const body = (await response.json()) as unknown;
-    if (!response.ok) throw new Error("Unable to load documents.");
-    setAttachments(Array.isArray(body) ? (body as AttachmentView[]) : []);
+    const subjectQuery = new URLSearchParams({ subjectId: entityId, subjectType: entityType });
+    const [response, grantResponse] = await Promise.all([
+      fetch(`/api/collaboration-documents/${entityType}/${entityId}`, { cache: "no-store" }),
+      workspaceRequest(`/api/delegations?${subjectQuery.toString()}`, "GET"),
+    ]);
+    const body = (await response.json()) as { attachments?: unknown; message?: string };
+    if (!response.ok) throw new Error(body.message ?? "Unable to load documents.");
+    setAttachments(Array.isArray(body.attachments) ? (body.attachments as AttachmentView[]) : []);
+    const grantValues = Array.isArray(grantResponse.grants)
+      ? (grantResponse.grants as {
+          delegateEmail: string;
+          delegateFullName: string | null;
+          delegateUserId: string | null;
+          status: string;
+        }[])
+      : [];
+    const choices = new Map<string, DocumentDelegateChoice>();
+    for (const grant of grantValues) {
+      if (grant.status === "active" && grant.delegateUserId !== null) {
+        choices.set(grant.delegateUserId, {
+          email: grant.delegateEmail,
+          id: grant.delegateUserId,
+          label: grant.delegateFullName ?? grant.delegateEmail,
+        });
+      }
+    }
+    setDelegateChoices([...choices.values()]);
   };
   useEffect(() => {
     void load().catch((error: unknown) => {
@@ -302,8 +225,14 @@ const DocumentsPanel = ({
               if (file === undefined) return;
               const form = new FormData();
               form.set("file", file);
+              form.set("visibility", uploadVisibility);
+              form.set("selectedUserIds", JSON.stringify(uploadSelectedUserIds));
+              if (delegateSafeName.trim().length > 0)
+                form.set("delegateSafeName", delegateSafeName.trim());
+              if (originalAttachmentId.length > 0)
+                form.set("originalAttachmentId", originalAttachmentId);
               setUploading(true);
-              void fetch(`/api/${entityType}s/${entityId}/attachments`, {
+              void fetch(`/api/collaboration-documents/${entityType}/${entityId}`, {
                 body: form,
                 method: "POST",
               })
@@ -311,6 +240,10 @@ const DocumentsPanel = ({
                   const body = (await response.json()) as { message?: string };
                   if (!response.ok) throw new Error(body.message ?? "Unable to upload document.");
                   await load();
+                  setDelegateSafeName("");
+                  setOriginalAttachmentId("");
+                  setUploadVisibility("internal_only");
+                  setUploadSelectedUserIds([]);
                   setMessage("Document uploaded.");
                 })
                 .catch((error: unknown) => {
@@ -325,12 +258,189 @@ const DocumentsPanel = ({
           />
         </label>
       </div>
+      <div className="document-sharing-controls">
+        <label>
+          New document visibility
+          <select
+            onChange={(event) => {
+              setUploadVisibility(event.target.value as AttachmentView["visibility"]);
+            }}
+            value={uploadVisibility}
+          >
+            <option value="internal_only">Internal only</option>
+            <option value="shared_all_delegates">Shared with delegates</option>
+            <option value="shared_selected_delegates">Shared with selected delegates</option>
+            <option value="redacted_delegate_copy">Redacted delegate copy</option>
+          </select>
+        </label>
+        {uploadVisibility === "redacted_delegate_copy" ? (
+          <>
+            <label>
+              Original document
+              <select
+                onChange={(event) => {
+                  setOriginalAttachmentId(event.target.value);
+                }}
+                required
+                value={originalAttachmentId}
+              >
+                <option value="">Select original…</option>
+                {attachments
+                  .filter((attachment) => attachment.visibility !== "redacted_delegate_copy")
+                  .map((attachment) => (
+                    <option key={attachment.id} value={attachment.id}>
+                      {attachment.displayName}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label>
+              Neutral filename
+              <input
+                onChange={(event) => {
+                  setDelegateSafeName(event.target.value);
+                }}
+                required
+                value={delegateSafeName}
+              />
+            </label>
+          </>
+        ) : null}
+        {uploadVisibility === "shared_selected_delegates" ? (
+          <fieldset className="document-audience-picker">
+            <legend>Selected delegates</legend>
+            {delegateChoices.map((choice) => (
+              <label className="checkbox-row" key={choice.id}>
+                <input
+                  checked={uploadSelectedUserIds.includes(choice.id)}
+                  onChange={(event) => {
+                    setUploadSelectedUserIds((current) =>
+                      event.target.checked
+                        ? [...new Set([...current, choice.id])]
+                        : current.filter((id) => id !== choice.id),
+                    );
+                  }}
+                  type="checkbox"
+                />
+                {choice.label}
+              </label>
+            ))}
+            {delegateChoices.length === 0 ? <p className="muted">No active delegates.</p> : null}
+          </fieldset>
+        ) : null}
+      </div>
       {attachments.length === 0 ? <p className="muted">No documents attached.</p> : null}
       <div className="attachment-list">
         {attachments.map((attachment) => (
           <div className="attachment-row" key={attachment.id}>
-            <a href={`/api/attachments/${attachment.id}`}>{attachment.originalName}</a>
+            <a href={`/api/collaboration-documents/file/${attachment.id}`}>
+              {attachment.displayName}
+            </a>
             <span>{(attachment.byteSize / 1024).toFixed(1)} KB</span>
+            <select
+              aria-label={`Visibility for ${attachment.displayName}`}
+              defaultValue={attachment.visibility}
+              onChange={(event) => {
+                void workspaceRequest(
+                  `/api/collaboration-documents/file/${attachment.id}/sharing`,
+                  "PATCH",
+                  {
+                    approvalStatus: attachment.approvalStatus,
+                    delegateSafeName: attachment.delegateSafeName,
+                    selectedUserIds: attachment.selectedUserIds,
+                    visibility: event.target.value,
+                  },
+                )
+                  .then(load)
+                  .then(() => {
+                    setMessage("Document visibility updated.");
+                  })
+                  .catch((error: unknown) => {
+                    setMessage(
+                      error instanceof Error
+                        ? error.message
+                        : "Unable to update document visibility.",
+                    );
+                  });
+              }}
+            >
+              <option value="internal_only">Internal</option>
+              <option value="shared_all_delegates">All delegates</option>
+              <option value="shared_selected_delegates">Selected delegates</option>
+              <option value="redacted_delegate_copy">Redacted copy</option>
+            </select>
+            <label className="attachment-audience">
+              Audience
+              <select
+                aria-label={`Selected audience for ${attachment.displayName}`}
+                multiple
+                onChange={(event) => {
+                  const selectedUserIds = [...event.target.selectedOptions].map(
+                    (option) => option.value,
+                  );
+                  void workspaceRequest(
+                    `/api/collaboration-documents/file/${attachment.id}/sharing`,
+                    "PATCH",
+                    {
+                      approvalStatus: attachment.approvalStatus,
+                      delegateSafeName: attachment.delegateSafeName,
+                      selectedUserIds,
+                      visibility: attachment.visibility,
+                    },
+                  )
+                    .then(load)
+                    .then(() => {
+                      setMessage("Document audience updated.");
+                    })
+                    .catch((error: unknown) => {
+                      setMessage(
+                        error instanceof Error ? error.message : "Unable to update the audience.",
+                      );
+                    });
+                }}
+                value={attachment.selectedUserIds}
+              >
+                {delegateChoices.map((choice) => (
+                  <option key={choice.id} value={choice.id}>
+                    {choice.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <select
+              aria-label={`Approval for ${attachment.displayName}`}
+              defaultValue={attachment.approvalStatus}
+              onChange={(event) => {
+                void workspaceRequest(
+                  `/api/collaboration-documents/file/${attachment.id}/sharing`,
+                  "PATCH",
+                  {
+                    approvalStatus: event.target.value,
+                    delegateSafeName: attachment.delegateSafeName,
+                    selectedUserIds: attachment.selectedUserIds,
+                    visibility: attachment.visibility,
+                  },
+                )
+                  .then(load)
+                  .then(() => {
+                    setMessage("Document approval updated.");
+                  })
+                  .catch((error: unknown) => {
+                    setMessage(
+                      error instanceof Error
+                        ? error.message
+                        : "Unable to update document approval.",
+                    );
+                  });
+              }}
+            >
+              <option value="draft">Draft</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+            </select>
+            <span>
+              {attachment.approvalStatus} · {attachment.scanStatus}
+            </span>
             <span>
               {attachment.purgeAfter === null
                 ? "Retained while active"
@@ -339,7 +449,7 @@ const DocumentsPanel = ({
             <button
               className="danger compact"
               onClick={() => {
-                if (!window.confirm(`Delete “${attachment.originalName}”?`)) return;
+                if (!window.confirm(`Delete “${attachment.displayName}”?`)) return;
                 void workspaceRequest(`/api/attachments/${attachment.id}`, "DELETE")
                   .then(load)
                   .then(() => {
@@ -363,20 +473,27 @@ const DocumentsPanel = ({
 };
 
 interface TimeEntryView {
+  actorDisplay: string;
+  canEdit: boolean;
   description: string;
   entryDate: string;
   hours: number;
   id: string;
+  version: number;
 }
 
 const TimesheetsPanel = ({
+  allocatedHours,
+  entityId,
+  entityType,
   onChanged,
   setMessage,
-  task,
 }: {
+  allocatedHours: number;
+  entityId: string;
+  entityType: "project" | "task";
   onChanged: () => Promise<void>;
   setMessage: (message: string) => void;
-  task: Task;
 }) => {
   const [entries, setEntries] = useState<TimeEntryView[]>([]);
   const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
@@ -384,16 +501,16 @@ const TimesheetsPanel = ({
   const [hours, setHours] = useState("");
   const [saving, setSaving] = useState(false);
   const load = async () => {
-    const body = await workspaceRequest(`/api/tasks/${task.id}/time-entries`, "GET");
-    setEntries(Array.isArray(body) ? body : []);
+    const response = await workspaceRequest(`/api/timesheets/${entityType}/${entityId}`, "GET");
+    setEntries(Array.isArray(response.entries) ? (response.entries as TimeEntryView[]) : []);
   };
   useEffect(() => {
     void load().catch(() => {
       setMessage("Unable to load time entries.");
     });
-  }, [task.id, task.version]);
+  }, [entityId, entityType]);
   const used = entries.reduce((total, entry) => total + entry.hours, 0);
-  const allocated = task.allocatedHours ?? 0;
+  const allocated = allocatedHours;
   return (
     <section className="timesheet-panel">
       <div className="timesheet-summary">
@@ -448,7 +565,7 @@ const TimesheetsPanel = ({
           }
           onClick={() => {
             setSaving(true);
-            void workspaceRequest(`/api/tasks/${task.id}/time-entries`, "POST", {
+            void workspaceRequest(`/api/timesheets/${entityType}/${entityId}`, "POST", {
               description,
               entryDate,
               hours: Number(hours),
@@ -478,6 +595,7 @@ const TimesheetsPanel = ({
             <tr>
               <th>Date</th>
               <th>Description</th>
+              <th>Person</th>
               <th>Hours</th>
               <th>
                 <span className="sr-only">Actions</span>
@@ -489,30 +607,35 @@ const TimesheetsPanel = ({
               <tr key={entry.id}>
                 <td>{entry.entryDate}</td>
                 <td>{entry.description}</td>
+                <td>{entry.actorDisplay}</td>
                 <td>{entry.hours}</td>
                 <td>
-                  <button
-                    className="danger compact"
-                    onClick={() => {
-                      void workspaceRequest(
-                        `/api/tasks/${task.id}/time-entries/${entry.id}`,
-                        "DELETE",
-                      )
-                        .then(async () => {
-                          await onChanged();
-                          await load();
-                          setMessage("Time entry deleted.");
-                        })
-                        .catch((error: unknown) => {
-                          setMessage(
-                            error instanceof Error ? error.message : "Unable to delete time entry.",
-                          );
-                        });
-                    }}
-                    type="button"
-                  >
-                    Delete
-                  </button>
+                  {entry.canEdit ? (
+                    <button
+                      className="danger compact"
+                      onClick={() => {
+                        void workspaceRequest(
+                          `/api/timesheets/${entityType}/${entityId}/${entry.id}`,
+                          "DELETE",
+                        )
+                          .then(async () => {
+                            await onChanged();
+                            await load();
+                            setMessage("Time entry deleted.");
+                          })
+                          .catch((error: unknown) => {
+                            setMessage(
+                              error instanceof Error
+                                ? error.message
+                                : "Unable to delete time entry.",
+                            );
+                          });
+                      }}
+                      type="button"
+                    >
+                      Delete
+                    </button>
+                  ) : null}
                 </td>
               </tr>
             ))}
@@ -750,16 +873,20 @@ export const TaskEditor = ({
         businessValueScore: score,
         checklist: checklist
           .filter(({ label }) => label.trim().length > 0)
-          .map(({ completed, description, label, predictedHours }, position) => ({
-            completed,
-            description:
-              description === null || description === undefined || description.trim().length === 0
-                ? null
-                : description.trim(),
-            label: label.trim(),
-            position,
-            predictedHours: predictedHours ?? null,
-          })),
+          .map(
+            ({ completed, delegateVisible, description, id, label, predictedHours }, position) => ({
+              completed,
+              delegateVisible: delegateVisible ?? false,
+              description:
+                description === null || description === undefined || description.trim().length === 0
+                  ? null
+                  : description.trim(),
+              label: label.trim(),
+              ...(id.startsWith("new-") || id.startsWith("created-") ? {} : { id }),
+              position,
+              predictedHours: predictedHours ?? null,
+            }),
+          ),
         clientName: clientNameValue(values.get("clientName")),
         definitionOfDone: optionalFormText(values.get("definitionOfDone")),
         dueDate: optionalFormText(values.get("dueDate")),
@@ -858,7 +985,9 @@ export const TaskEditor = ({
 
   return (
     <EntityDialog
-      audit={<AuditPanel data={data} entityId={task.id} entityType="task" version={task.version} />}
+      audit={
+        <ActivityTimeline data={data} entityId={task.id} entityType="task" version={task.version} />
+      }
       label={`Task details: ${task.title}`}
       onClose={onClose}
     >
@@ -873,6 +1002,7 @@ export const TaskEditor = ({
           ["checklist", "Subtasks", megaMissingSubtasks],
           ["dependencies", "Dependencies"],
           ["documents", "Documents"],
+          ["delegations", "Delegations"],
         ]}
       />
       <p aria-live="polite" className="form-message entity-message">
@@ -1110,7 +1240,13 @@ export const TaskEditor = ({
           />
         </div>
         <div hidden={active !== "timesheets"}>
-          <TimesheetsPanel onChanged={onChanged} setMessage={setMessage} task={task} />
+          <TimesheetsPanel
+            allocatedHours={task.allocatedHours ?? 0}
+            entityId={task.id}
+            entityType="task"
+            onChanged={onChanged}
+            setMessage={setMessage}
+          />
         </div>
         <div hidden={active !== "checklist"}>
           <div className="checklist-editor">
@@ -1127,6 +1263,7 @@ export const TaskEditor = ({
                     <th>Title</th>
                     <th>Description</th>
                     <th>Predicted hours</th>
+                    <th>Delegate access</th>
                     <th>
                       <span className="sr-only">Actions</span>
                     </th>
@@ -1207,6 +1344,22 @@ export const TaskEditor = ({
                         />
                       </td>
                       <td>
+                        <input
+                          aria-label={`Share subtask ${String(index + 1)} with delegates`}
+                          checked={item.delegateVisible ?? false}
+                          onChange={(event) => {
+                            setChecklist((current) =>
+                              current.map((candidate, candidateIndex) =>
+                                candidateIndex === index
+                                  ? { ...candidate, delegateVisible: event.target.checked }
+                                  : candidate,
+                              ),
+                            );
+                          }}
+                          type="checkbox"
+                        />
+                      </td>
+                      <td>
                         <button
                           aria-label={`Remove subtask ${String(index + 1)}`}
                           className="secondary compact"
@@ -1232,6 +1385,7 @@ export const TaskEditor = ({
                       {checklist.reduce((total, item) => total + (item.predictedHours ?? 0), 0)}h
                     </td>
                     <td />
+                    <td />
                   </tr>
                 </tfoot>
               </table>
@@ -1243,6 +1397,7 @@ export const TaskEditor = ({
                   ...current,
                   {
                     completed: false,
+                    delegateVisible: false,
                     description: null,
                     id: `new-${String(Date.now())}`,
                     label: "",
@@ -1284,7 +1439,7 @@ export const TaskEditor = ({
         <div hidden={active !== "documents"}>
           <DocumentsPanel entityId={task.id} entityType="task" setMessage={setMessage} />
         </div>
-        <footer className="entity-modal-footer">
+        <footer className="entity-modal-footer" hidden={active === "delegations"}>
           <button disabled={saving} type="submit">
             {saving ? "Saving…" : "Save task"}
           </button>
@@ -1311,6 +1466,14 @@ export const TaskEditor = ({
           </button>
         </footer>
       </form>
+      <div hidden={active !== "delegations"}>
+        <SubjectDelegationsPanel
+          onChanged={onChanged}
+          subjectId={task.id}
+          subjectTitle={task.title}
+          subjectType="task"
+        />
+      </div>
     </EntityDialog>
   );
 };
@@ -1455,7 +1618,7 @@ export const ProjectEditor = ({
   return (
     <EntityDialog
       audit={
-        <AuditPanel
+        <ActivityTimeline
           data={data}
           entityId={project.id}
           entityType="project"
@@ -1472,10 +1635,12 @@ export const ProjectEditor = ({
         tabs={[
           ["details", "Details"],
           ["notes", "Notes"],
+          ["timesheets", "Timesheets"],
           ["tasks", "Tasks"],
           ["gantt", "Gantt"],
           ["dependencies", "Dependencies"],
           ["documents", "Documents"],
+          ["delegations", "Delegations"],
         ]}
       />
       <p aria-live="polite" className="form-message entity-message">
@@ -1602,6 +1767,15 @@ export const ProjectEditor = ({
             value={notes}
           />
         </div>
+        <div hidden={active !== "timesheets"}>
+          <TimesheetsPanel
+            allocatedHours={metrics?.allocatedHours ?? 0}
+            entityId={project.id}
+            entityType="project"
+            onChanged={onChanged}
+            setMessage={setMessage}
+          />
+        </div>
         <div hidden={active !== "tasks"}>
           <div className="table-scroll">
             {linkedTasks.length === 0 ? <p className="muted">No linked tasks.</p> : null}
@@ -1682,7 +1856,7 @@ export const ProjectEditor = ({
         <div hidden={active !== "documents"}>
           <DocumentsPanel entityId={project.id} entityType="project" setMessage={setMessage} />
         </div>
-        <footer className="entity-modal-footer">
+        <footer className="entity-modal-footer" hidden={active === "delegations"}>
           <button disabled={saving} type="submit">
             {saving ? "Saving…" : "Save project"}
           </button>
@@ -1691,6 +1865,14 @@ export const ProjectEditor = ({
           </button>
         </footer>
       </form>
+      <div hidden={active !== "delegations"}>
+        <SubjectDelegationsPanel
+          onChanged={onChanged}
+          subjectId={project.id}
+          subjectTitle={project.name}
+          subjectType="project"
+        />
+      </div>
     </EntityDialog>
   );
 };

@@ -36,7 +36,7 @@ describe("LoginForm", () => {
       }),
     );
     render(<LoginForm />);
-    await userEvent.type(screen.getByLabelText("Username"), "unknown");
+    await userEvent.type(screen.getByLabelText("Username or email"), "unknown");
     await userEvent.type(screen.getByLabelText("Password"), "wrong password");
     const form = screen.getByRole("button", { name: "Sign in" }).closest("form");
     expect(form).not.toBeNull();
@@ -49,7 +49,7 @@ describe("LoginForm", () => {
       new Response(JSON.stringify({ authenticated: true }), { status: 200 }),
     );
     render(<LoginForm />);
-    await userEvent.type(screen.getByLabelText("Username"), "synthetic-owner");
+    await userEvent.type(screen.getByLabelText("Username or email"), "synthetic-owner");
     await userEvent.type(screen.getByLabelText("Password"), "synthetic password");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await waitFor(() => {

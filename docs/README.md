@@ -8,6 +8,7 @@ This directory contains durable public documentation for OpsWeave. Documents des
 - [Development guide](development.md)
 - [Environment configuration](environment.md)
 - [Authentication and owner access](authentication.md)
+- [Delegation and collaboration](collaboration.md)
 - [Settings](settings.md)
 - [AI intake](intake.md)
 - [Reporting](reporting.md)

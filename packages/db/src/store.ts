@@ -99,6 +99,46 @@ export interface SessionRecord extends SessionTimes {
   readonly workspaceId: string;
 }
 
+export type WorkspaceRole = "admin" | "delegate" | "owner";
+export type AccountStatus = "active" | "archived" | "deactivated" | "invited";
+
+export interface UserCredentialRecord {
+  readonly authorizationVersion: number;
+  readonly credentialVersion: number;
+  readonly email: string | null;
+  readonly fullName: string | null;
+  readonly membershipAuthorizationVersion: number;
+  readonly membershipId: string;
+  readonly membershipStatus: AccountStatus;
+  readonly normalizedEmail: string | null;
+  readonly normalizedUsername: string | null;
+  readonly ownerId: string | null;
+  readonly passwordChangedAt: Date;
+  readonly passwordHash: string;
+  readonly role: WorkspaceRole;
+  readonly userId: string;
+  readonly userStatus: AccountStatus;
+  readonly username: string | null;
+  readonly workspaceId: string;
+}
+
+export interface PrincipalSessionRecord extends SessionTimes {
+  readonly authorizationVersion: number;
+  readonly email: string | null;
+  readonly fullName: string | null;
+  readonly id: string;
+  readonly membershipAuthorizationVersion: number;
+  readonly membershipId: string;
+  readonly membershipStatus: AccountStatus;
+  readonly ownerId: string | null;
+  readonly role: WorkspaceRole;
+  readonly tokenDigest: string;
+  readonly userId: string;
+  readonly userStatus: AccountStatus;
+  readonly username: string | null;
+  readonly workspaceId: string;
+}
+
 export interface WorkspaceConfiguration {
   readonly general: GeneralSettingsInput;
   readonly ownerIdentity: {
@@ -167,11 +207,14 @@ export interface ProjectRecord {
 
 export interface TaskChecklistItemRecord {
   readonly completed: boolean;
+  readonly createdByUserId: string | null;
+  readonly delegateVisible: boolean;
   readonly description: string | null;
   readonly id: string;
   readonly label: string;
   readonly position: number;
   readonly predictedHours: number | null;
+  readonly version: number;
 }
 
 export interface TaskTimeEntryRecord {
@@ -209,6 +252,8 @@ export interface TaskRecord {
   readonly deletedAt: Date | null;
   readonly dueDate: string | null;
   readonly endTime: string | null;
+  readonly delegateReviewPending?: boolean;
+  readonly externallyAssigned?: boolean;
   readonly hoursSpent: number | null;
   readonly hoursLeft: number;
   readonly id: string;
@@ -226,6 +271,7 @@ export interface TaskRecord {
   readonly requiresBreakdown: boolean;
   readonly scheduleLocked: boolean;
   readonly notes: unknown;
+  readonly ownerWorkAssigned?: boolean;
   readonly origin: string | null;
   readonly size: "large" | "medium" | "small" | "mega" | null;
   readonly sizeManualOverride: boolean;
@@ -398,7 +444,9 @@ export interface TaskInput {
   checklist?:
     | readonly {
         completed: boolean;
+        delegateVisible?: boolean | undefined;
         description?: string | null | undefined;
+        id?: string | undefined;
         label: string;
         position: number;
         predictedHours?: number | null | undefined;
@@ -546,24 +594,37 @@ const audit = async (
   input: {
     action: string;
     actorOwnerId?: string;
+    actorUserId?: string;
+    category?: string;
     metadata?: unknown;
     targetId?: string;
     targetType: string;
+    userGenerated?: boolean;
+    visibility?:
+      "actor_and_owner" | "authorised_participants" | "owner_admin" | "selected_participants";
     workspaceId: string;
   },
 ) => {
   await client.query(
     `INSERT INTO opsweave.audit_events
-      (workspace_id, actor_owner_id, action, target_type, target_id, correlation_id, metadata)
-     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+      (workspace_id,actor_owner_id,actor_user_id,action,category,target_type,target_id,
+       correlation_id,metadata,user_generated,visibility,subject_project_id,subject_task_id)
+     VALUES ($1,$2,coalesce($3,(SELECT user_id FROM opsweave.owners WHERE id=$2)),$4,$5,$6::varchar(64),$7::varchar(100),$8,
+       $9::jsonb,$10,$11,
+       CASE WHEN $6::text='project' AND $7::text ~* '^[0-9a-f-]{36}$' THEN $7::uuid ELSE NULL END,
+       CASE WHEN $6::text='task' AND $7::text ~* '^[0-9a-f-]{36}$' THEN $7::uuid ELSE NULL END)`,
     [
       input.workspaceId,
       input.actorOwnerId ?? null,
+      input.actorUserId ?? null,
       input.action,
+      input.category ?? "system",
       input.targetType,
       input.targetId ?? null,
       randomUUID(),
       JSON.stringify(redactAuditMetadata(input.metadata ?? {})),
+      input.userGenerated ?? false,
+      input.visibility ?? "owner_admin",
     ],
   );
 };
@@ -795,10 +856,18 @@ export class OpsWeaveStore {
       );
       const workspaceId = workspaceResult.rows[0]?.id;
       if (workspaceId === undefined) throw new Error("Workspace bootstrap failed.");
+      const userResult = await client.query<{ id: string }>(
+        `INSERT INTO opsweave.users
+          (username,normalized_username,status,authorization_version)
+         VALUES ($1,$2,'active',1) RETURNING id`,
+        [input.username, input.normalizedUsername],
+      );
+      const userId = userResult.rows[0]?.id;
+      if (userId === undefined) throw new Error("Owner user bootstrap failed.");
       const ownerResult = await client.query<{ id: string }>(
-        `INSERT INTO opsweave.owners (workspace_id, username, normalized_username)
-         VALUES ($1,$2,$3) RETURNING id`,
-        [workspaceId, input.username, input.normalizedUsername],
+        `INSERT INTO opsweave.owners (user_id,workspace_id,username,normalized_username)
+         VALUES ($1,$2,$3,$4) RETURNING id`,
+        [userId, workspaceId, input.username, input.normalizedUsername],
       );
       const ownerId = ownerResult.rows[0]?.id;
       if (ownerId === undefined) throw new Error("Owner bootstrap failed.");
@@ -814,6 +883,25 @@ export class OpsWeaveStore {
           passwordChangedAt,
         ],
       );
+      await client.query(
+        `INSERT INTO opsweave.user_credentials
+          (user_id,password_hash,password_algorithm,password_parameters,password_changed_at)
+         VALUES ($1,$2,'argon2id-v19',$3::jsonb,$4)`,
+        [
+          userId,
+          input.passwordHash,
+          JSON.stringify({ memoryCost: 19_456, outputLen: 32, parallelism: 1, timeCost: 2 }),
+          passwordChangedAt,
+        ],
+      );
+      const membershipResult = await client.query<{ id: string }>(
+        `INSERT INTO opsweave.workspace_memberships
+          (workspace_id,user_id,role,status,activated_at,lifecycle_actor_user_id)
+         VALUES ($1,$2,'owner','active',now(),$2) RETURNING id`,
+        [workspaceId, userId],
+      );
+      if (membershipResult.rows[0] === undefined)
+        throw new Error("Owner membership bootstrap failed.");
       await client.query("INSERT INTO opsweave.workspace_settings (workspace_id) VALUES ($1)", [
         workspaceId,
       ]);
@@ -833,6 +921,7 @@ export class OpsWeaveStore {
       await audit(client, {
         action: "owner.bootstrap.completed",
         actorOwnerId: ownerId,
+        actorUserId: userId,
         metadata: { normalizedUsername: input.normalizedUsername },
         targetId: ownerId,
         targetType: "owner",
@@ -878,6 +967,158 @@ export class OpsWeaveStore {
     return result.rows[0] ?? null;
   }
 
+  public async getWorkspaceOwnerCompatibility(
+    workspaceId: string,
+  ): Promise<{ ownerId: string; username: string } | null> {
+    const result = await this.pool.query<{ ownerId: string; username: string }>(
+      `SELECT id AS "ownerId",username FROM opsweave.owners WHERE workspace_id=$1`,
+      [workspaceId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  public async findUserForLogin(normalizedLogin: string): Promise<UserCredentialRecord | null> {
+    const result = await this.pool.query<UserCredentialRecord>(
+      `SELECT "user".id AS "userId","user".email,"user".normalized_email AS "normalizedEmail",
+        "user".username,"user".normalized_username AS "normalizedUsername",
+        "user".full_name AS "fullName","user".status AS "userStatus",
+        "user".authorization_version AS "authorizationVersion",
+        membership.id AS "membershipId",membership.workspace_id AS "workspaceId",
+        membership.role,membership.status AS "membershipStatus",
+        membership.authorization_version AS "membershipAuthorizationVersion",
+        owner.id AS "ownerId",credential.password_hash AS "passwordHash",
+        credential.password_changed_at AS "passwordChangedAt",
+        credential.credential_version AS "credentialVersion"
+       FROM opsweave.users "user"
+       JOIN opsweave.user_credentials credential ON credential.user_id="user".id
+       JOIN opsweave.workspace_memberships membership ON membership.user_id="user".id
+       LEFT JOIN opsweave.owners owner
+         ON owner.user_id="user".id AND owner.workspace_id=membership.workspace_id
+       WHERE "user".normalized_username=$1 OR "user".normalized_email=$1
+       ORDER BY CASE membership.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
+         membership.created_at LIMIT 1`,
+      [normalizedLogin],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  public async getOnlyUserCredential(): Promise<UserCredentialRecord | null> {
+    const result = await this.pool.query<UserCredentialRecord>(
+      `SELECT "user".id AS "userId","user".email,"user".normalized_email AS "normalizedEmail",
+        "user".username,"user".normalized_username AS "normalizedUsername",
+        "user".full_name AS "fullName","user".status AS "userStatus",
+        "user".authorization_version AS "authorizationVersion",
+        membership.id AS "membershipId",membership.workspace_id AS "workspaceId",
+        membership.role,membership.status AS "membershipStatus",
+        membership.authorization_version AS "membershipAuthorizationVersion",
+        owner.id AS "ownerId",credential.password_hash AS "passwordHash",
+        credential.password_changed_at AS "passwordChangedAt",
+        credential.credential_version AS "credentialVersion"
+       FROM opsweave.users "user"
+       JOIN opsweave.user_credentials credential ON credential.user_id="user".id
+       JOIN opsweave.workspace_memberships membership ON membership.user_id="user".id
+       LEFT JOIN opsweave.owners owner
+         ON owner.user_id="user".id AND owner.workspace_id=membership.workspace_id
+       ORDER BY CASE membership.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END LIMIT 1`,
+    );
+    return result.rows[0] ?? null;
+  }
+
+  public async getUserCredentialById(
+    workspaceId: string,
+    userId: string,
+  ): Promise<UserCredentialRecord | null> {
+    const result = await this.pool.query<UserCredentialRecord>(
+      `SELECT "user".id AS "userId","user".email,"user".normalized_email AS "normalizedEmail",
+        "user".username,"user".normalized_username AS "normalizedUsername",
+        "user".full_name AS "fullName","user".status AS "userStatus",
+        "user".authorization_version AS "authorizationVersion",
+        membership.id AS "membershipId",membership.workspace_id AS "workspaceId",
+        membership.role,membership.status AS "membershipStatus",
+        membership.authorization_version AS "membershipAuthorizationVersion",
+        owner.id AS "ownerId",credential.password_hash AS "passwordHash",
+        credential.password_changed_at AS "passwordChangedAt",
+        credential.credential_version AS "credentialVersion"
+       FROM opsweave.users "user"
+       JOIN opsweave.user_credentials credential ON credential.user_id="user".id
+       JOIN opsweave.workspace_memberships membership ON membership.user_id="user".id
+       LEFT JOIN opsweave.owners owner
+         ON owner.user_id="user".id AND owner.workspace_id=membership.workspace_id
+       WHERE "user".id=$1 AND membership.workspace_id=$2`,
+      [userId, workspaceId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  public async createPrincipalSession(
+    user: UserCredentialRecord,
+    tokenDigest: string,
+    times: SessionTimes,
+  ): Promise<PrincipalSessionRecord> {
+    const result = await this.pool.query<PrincipalSessionRecord>(
+      `INSERT INTO opsweave.sessions
+        (owner_id,user_id,membership_id,authorization_version,workspace_id,token_digest,
+         created_at,last_seen_at,idle_expires_at,absolute_expires_at,recent_authenticated_at,revoked_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       RETURNING id,owner_id AS "ownerId",user_id AS "userId",membership_id AS "membershipId",
+        authorization_version AS "authorizationVersion",workspace_id AS "workspaceId",
+        token_digest AS "tokenDigest",created_at AS "createdAt",last_seen_at AS "lastSeenAt",
+        idle_expires_at AS "idleExpiresAt",absolute_expires_at AS "absoluteExpiresAt",
+        recent_authenticated_at AS "recentAuthenticatedAt",revoked_at AS "revokedAt"`,
+      [
+        user.ownerId,
+        user.userId,
+        user.membershipId,
+        user.authorizationVersion,
+        user.workspaceId,
+        tokenDigest,
+        times.createdAt,
+        times.lastSeenAt,
+        times.idleExpiresAt,
+        times.absoluteExpiresAt,
+        times.recentAuthenticatedAt,
+        times.revokedAt,
+      ],
+    );
+    const session = result.rows[0];
+    if (session === undefined) throw new Error("Session creation failed.");
+    return {
+      ...session,
+      email: user.email,
+      fullName: user.fullName,
+      membershipAuthorizationVersion: user.membershipAuthorizationVersion,
+      membershipStatus: user.membershipStatus,
+      role: user.role,
+      userStatus: user.userStatus,
+      username: user.username,
+    };
+  }
+
+  public async findPrincipalSessionByDigest(
+    tokenDigest: string,
+  ): Promise<PrincipalSessionRecord | null> {
+    const result = await this.pool.query<PrincipalSessionRecord>(
+      `SELECT session.id,session.owner_id AS "ownerId",session.user_id AS "userId",
+        session.membership_id AS "membershipId",session.authorization_version AS "authorizationVersion",
+        session.workspace_id AS "workspaceId",session.token_digest AS "tokenDigest",
+        session.created_at AS "createdAt",session.last_seen_at AS "lastSeenAt",
+        session.idle_expires_at AS "idleExpiresAt",session.absolute_expires_at AS "absoluteExpiresAt",
+        session.recent_authenticated_at AS "recentAuthenticatedAt",session.revoked_at AS "revokedAt",
+        "user".email,"user".full_name AS "fullName","user".username,
+        "user".status AS "userStatus",membership.role,
+        membership.status AS "membershipStatus",
+        membership.authorization_version AS "membershipAuthorizationVersion"
+       FROM opsweave.sessions session
+       JOIN opsweave.users "user" ON "user".id=session.user_id
+       JOIN opsweave.workspace_memberships membership ON membership.id=session.membership_id
+       WHERE session.token_digest=$1 AND membership.workspace_id=session.workspace_id
+         AND membership.user_id=session.user_id
+         AND session.authorization_version="user".authorization_version`,
+      [tokenDigest],
+    );
+    return result.rows[0] ?? null;
+  }
+
   public async recoverOwner(normalizedUsername: string, passwordHash: string): Promise<void> {
     await transaction(this.pool, async (client) => {
       const result = await client.query<{ ownerId: string; workspaceId: string }>(
@@ -892,6 +1133,12 @@ export class OpsWeaveStore {
       await client.query(
         `UPDATE opsweave.owner_credentials SET password_hash=$1,password_changed_at=now(),
           credential_version=credential_version+1,updated_at=now() WHERE owner_id=$2`,
+        [passwordHash, owner.ownerId],
+      );
+      await client.query(
+        `UPDATE opsweave.user_credentials credential SET password_hash=$1,password_changed_at=now(),
+          credential_version=credential_version+1,updated_at=now()
+         FROM opsweave.owners owner WHERE owner.id=$2 AND credential.user_id=owner.user_id`,
         [passwordHash, owner.ownerId],
       );
       await client.query(
@@ -916,9 +1163,14 @@ export class OpsWeaveStore {
   ): Promise<SessionRecord> {
     const result = await this.pool.query<SessionRecord>(
       `INSERT INTO opsweave.sessions
-        (owner_id,workspace_id,token_digest,created_at,last_seen_at,idle_expires_at,
-         absolute_expires_at,recent_authenticated_at,revoked_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        (owner_id,user_id,membership_id,authorization_version,workspace_id,token_digest,
+         created_at,last_seen_at,idle_expires_at,absolute_expires_at,recent_authenticated_at,revoked_at)
+       SELECT $1,owner.user_id,membership.id,"user".authorization_version,$2,$3,$4,$5,$6,$7,$8,$9
+       FROM opsweave.owners owner
+       JOIN opsweave.users "user" ON "user".id=owner.user_id
+       JOIN opsweave.workspace_memberships membership
+         ON membership.user_id=owner.user_id AND membership.workspace_id=owner.workspace_id
+       WHERE owner.id=$1 AND owner.workspace_id=$2
        RETURNING id,owner_id AS "ownerId",workspace_id AS "workspaceId",token_digest AS "tokenDigest",
         created_at AS "createdAt",last_seen_at AS "lastSeenAt",idle_expires_at AS "idleExpiresAt",
         absolute_expires_at AS "absoluteExpiresAt",recent_authenticated_at AS "recentAuthenticatedAt",
@@ -998,6 +1250,118 @@ export class OpsWeaveStore {
     return Number(result.rows[0]?.count ?? 0);
   }
 
+  public async revokeOtherUserSessions(
+    userId: string,
+    workspaceId: string,
+    currentSessionId: string,
+  ): Promise<number> {
+    return transaction(this.pool, async (client) => {
+      const result = await client.query(
+        `UPDATE opsweave.sessions SET revoked_at=now()
+         WHERE user_id=$1 AND workspace_id=$2 AND id<>$3 AND revoked_at IS NULL`,
+        [userId, workspaceId, currentSessionId],
+      );
+      await audit(client, {
+        action: "sessions.others_revoked",
+        actorUserId: userId,
+        metadata: { revokedCount: result.rowCount ?? 0 },
+        targetType: "session",
+        workspaceId,
+      });
+      return result.rowCount ?? 0;
+    });
+  }
+
+  public async countOtherActiveUserSessions(
+    userId: string,
+    workspaceId: string,
+    currentId: string,
+    now: Date,
+  ): Promise<number> {
+    const result = await this.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM opsweave.sessions
+       WHERE user_id=$1 AND workspace_id=$2 AND id<>$3 AND revoked_at IS NULL
+         AND idle_expires_at>$4 AND absolute_expires_at>$4`,
+      [userId, workspaceId, currentId, now],
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
+  public async changeUserPassword(input: {
+    newPasswordHash: string;
+    times: SessionTimes;
+    tokenDigest: string;
+    user: UserCredentialRecord;
+  }): Promise<PrincipalSessionRecord> {
+    return transaction(this.pool, async (client) => {
+      const updated = await client.query(
+        `UPDATE opsweave.user_credentials SET password_hash=$1,password_changed_at=now(),
+          credential_version=credential_version+1,updated_at=now()
+         WHERE user_id=$2 AND credential_version=$3`,
+        [input.newPasswordHash, input.user.userId, input.user.credentialVersion],
+      );
+      if (updated.rowCount !== 1) {
+        throw new StoreConflictError("Credentials changed in another request.");
+      }
+      if (input.user.ownerId !== null) {
+        await client.query(
+          `UPDATE opsweave.owner_credentials SET password_hash=$1,password_changed_at=now(),
+            credential_version=credential_version+1,updated_at=now() WHERE owner_id=$2`,
+          [input.newPasswordHash, input.user.ownerId],
+        );
+      }
+      await client.query(
+        `UPDATE opsweave.sessions SET revoked_at=now()
+         WHERE user_id=$1 AND workspace_id=$2 AND revoked_at IS NULL`,
+        [input.user.userId, input.user.workspaceId],
+      );
+      const sessionResult = await client.query<PrincipalSessionRecord>(
+        `INSERT INTO opsweave.sessions
+          (owner_id,user_id,membership_id,authorization_version,workspace_id,token_digest,
+           created_at,last_seen_at,idle_expires_at,absolute_expires_at,recent_authenticated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         RETURNING id,owner_id AS "ownerId",user_id AS "userId",membership_id AS "membershipId",
+          authorization_version AS "authorizationVersion",workspace_id AS "workspaceId",
+          token_digest AS "tokenDigest",created_at AS "createdAt",last_seen_at AS "lastSeenAt",
+          idle_expires_at AS "idleExpiresAt",absolute_expires_at AS "absoluteExpiresAt",
+          recent_authenticated_at AS "recentAuthenticatedAt",revoked_at AS "revokedAt"`,
+        [
+          input.user.ownerId,
+          input.user.userId,
+          input.user.membershipId,
+          input.user.authorizationVersion,
+          input.user.workspaceId,
+          input.tokenDigest,
+          input.times.createdAt,
+          input.times.lastSeenAt,
+          input.times.idleExpiresAt,
+          input.times.absoluteExpiresAt,
+          input.times.recentAuthenticatedAt,
+        ],
+      );
+      await audit(client, {
+        action: "user.password_changed",
+        actorUserId: input.user.userId,
+        metadata: { otherSessionsInvalidated: true, sessionRotated: true },
+        targetId: input.user.userId,
+        targetType: "user",
+        workspaceId: input.user.workspaceId,
+      });
+      const session = sessionResult.rows[0];
+      if (session === undefined) throw new Error("Session rotation failed.");
+      return {
+        ...session,
+        email: input.user.email,
+        fullName: input.user.fullName,
+        membershipAuthorizationVersion: input.user.membershipAuthorizationVersion,
+        membershipStatus: input.user.membershipStatus,
+        role: input.user.role,
+        userStatus: input.user.userStatus,
+        username: input.user.username,
+      };
+    });
+  }
+
   public async changePassword(input: {
     credentialVersion: number;
     newPasswordHash: string;
@@ -1018,14 +1382,26 @@ export class OpsWeaveStore {
         throw new StoreConflictError("Credentials changed in another request.");
       }
       await client.query(
+        `UPDATE opsweave.user_credentials credential SET password_hash=$1,password_changed_at=now(),
+          credential_version=credential_version+1,updated_at=now()
+         FROM opsweave.owners owner
+         WHERE owner.id=$2 AND credential.user_id=owner.user_id`,
+        [input.newPasswordHash, input.ownerId],
+      );
+      await client.query(
         "UPDATE opsweave.sessions SET revoked_at=now() WHERE owner_id=$1 AND revoked_at IS NULL",
         [input.ownerId],
       );
       const sessionResult = await client.query<SessionRecord>(
         `INSERT INTO opsweave.sessions
-          (owner_id,workspace_id,token_digest,created_at,last_seen_at,idle_expires_at,
-           absolute_expires_at,recent_authenticated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+          (owner_id,user_id,membership_id,authorization_version,workspace_id,token_digest,
+           created_at,last_seen_at,idle_expires_at,absolute_expires_at,recent_authenticated_at)
+         SELECT $1,owner.user_id,membership.id,"user".authorization_version,$2,$3,$4,$5,$6,$7,$8
+         FROM opsweave.owners owner
+         JOIN opsweave.users "user" ON "user".id=owner.user_id
+         JOIN opsweave.workspace_memberships membership
+           ON membership.user_id=owner.user_id AND membership.workspace_id=owner.workspace_id
+         WHERE owner.id=$1 AND owner.workspace_id=$2
          RETURNING id,owner_id AS "ownerId",workspace_id AS "workspaceId",token_digest AS "tokenDigest",
           created_at AS "createdAt",last_seen_at AS "lastSeenAt",idle_expires_at AS "idleExpiresAt",
           absolute_expires_at AS "absoluteExpiresAt",recent_authenticated_at AS "recentAuthenticatedAt",
@@ -1709,6 +2085,32 @@ export class OpsWeaveStore {
       );
       if (JSON.stringify(existing.notes) !== JSON.stringify(project.notes))
         changes.notes = { from: "Previous content", to: "Edited content" };
+      if (["clientName", "description", "name", "notes"].some((field) => field in changes)) {
+        await client.query(
+          `UPDATE opsweave.delegate_entity_presentations presentation SET status='stale',
+            approved_by_user_id=NULL,approved_at=NULL,version=presentation.version+1,updated_at=now()
+           FROM opsweave.projects project
+           WHERE presentation.subject_project_id=project.id AND project.id=$1
+             AND project.workspace_id=$2 AND project.anonymise_delegation
+             AND presentation.status='approved'`,
+          [projectId, workspaceId],
+        );
+        await client.query(
+          `INSERT INTO opsweave.protected_terms
+            (workspace_id,context_project_id,term_type,value,normalized_value,created_by_user_id)
+           SELECT $2,$1,candidate.term_type,candidate.value,lower(trim(candidate.value)),owner.user_id
+           FROM opsweave.projects project
+           JOIN opsweave.owners owner ON owner.id=$3 AND owner.workspace_id=$2
+           LEFT JOIN opsweave.tasks task ON task.project_id=project.id AND task.deleted_at IS NULL
+           CROSS JOIN LATERAL (VALUES ('company'::varchar,project.name),
+             ('client'::varchar,project.client_name),('other'::varchar,task.title))
+             candidate(term_type,value)
+           WHERE project.id=$1 AND project.workspace_id=$2 AND project.anonymise_delegation
+             AND candidate.value IS NOT NULL AND length(trim(candidate.value))>=2
+           ON CONFLICT DO NOTHING`,
+          [projectId, workspaceId, ownerId],
+        );
+      }
       await audit(client, {
         action: input.archived ? "project.archived" : "project.updated",
         actorOwnerId: ownerId,
@@ -1733,7 +2135,9 @@ export class OpsWeaveStore {
     if (tasksToAttach.length === 0) return [];
     const ids = tasksToAttach.map((task) => task.id);
     const result = await this.pool.query<TaskChecklistItemRecord & { taskId: string }>(
-      `SELECT id,task_id AS "taskId",label,description,predicted_hours::float8 AS "predictedHours",completed,position FROM opsweave.task_checklist_items
+      `SELECT id,task_id AS "taskId",label,description,predicted_hours::float8 AS "predictedHours",
+        completed,position,created_by_user_id AS "createdByUserId",delegate_visible AS "delegateVisible",version
+       FROM opsweave.task_checklist_items
        WHERE task_id=ANY($1::uuid[]) ORDER BY task_id,position,id`,
       [ids],
     );
@@ -1742,11 +2146,14 @@ export class OpsWeaveStore {
       const items = byTask.get(item.taskId) ?? [];
       items.push({
         completed: item.completed,
+        createdByUserId: item.createdByUserId,
+        delegateVisible: item.delegateVisible,
         description: item.description,
         id: item.id,
         label: item.label,
         position: item.position,
         predictedHours: item.predictedHours,
+        version: item.version,
       });
       byTask.set(item.taskId, items);
     }
@@ -1792,6 +2199,16 @@ export class OpsWeaveStore {
         planning_rationale AS "planningRationale",last_planned_by AS "lastPlannedBy",
         last_planned_at AS "lastPlannedAt",
         completed_at AS "completedAt",cancelled_at AS "cancelledAt",deleted_at AS "deletedAt",
+        owner_work_assigned AS "ownerWorkAssigned",
+        EXISTS (SELECT 1 FROM opsweave.delegate_task_states delegate_state
+          JOIN opsweave.delegate_kanban_stages delegate_stage
+            ON delegate_stage.id=delegate_state.stage_id
+          WHERE delegate_state.task_id=tasks.id
+            AND tasks.workflow_lane='delegated'
+            AND delegate_stage.semantic_kind='ready_for_review') AS "delegateReviewPending",
+        EXISTS (SELECT 1 FROM opsweave.task_assignments assignment
+          WHERE assignment.task_id=tasks.id AND assignment.active
+            AND assignment.assignment_role='delivery') AS "externallyAssigned",
         version,created_at AS "createdAt"
        FROM opsweave.tasks WHERE workspace_id=$1 AND deleted_at IS NULL
         ${projectId === undefined ? "" : "AND project_id=$2"}
@@ -1898,7 +2315,9 @@ export class OpsWeaveStore {
       if (task === undefined) throw new Error("Task creation failed.");
       for (const item of input.checklist ?? []) {
         await client.query(
-          "INSERT INTO opsweave.task_checklist_items (task_id,label,description,predicted_hours,completed,position) VALUES ($1,$2,$3,$4,$5,$6)",
+          `INSERT INTO opsweave.task_checklist_items
+            (task_id,label,description,predicted_hours,completed,position,created_by_user_id,delegate_visible)
+           VALUES ($1,$2,$3,$4,$5,$6,(SELECT user_id FROM opsweave.owners WHERE id=$7),$8)`,
           [
             task.id,
             item.label,
@@ -1906,6 +2325,8 @@ export class OpsWeaveStore {
             item.predictedHours ?? null,
             item.completed,
             item.position,
+            ownerId,
+            item.delegateVisible ?? false,
           ],
         );
       }
@@ -1927,11 +2348,14 @@ export class OpsWeaveStore {
         ...task,
         checklist: (input.checklist ?? []).map((item, index) => ({
           completed: item.completed,
+          createdByUserId: null,
+          delegateVisible: item.delegateVisible ?? false,
           description: item.description ?? null,
           id: `created-${String(index)}`,
           label: item.label,
           position: item.position,
           predictedHours: item.predictedHours ?? null,
+          version: 1,
         })),
       };
     });
@@ -2111,29 +2535,77 @@ export class OpsWeaveStore {
       if (task === undefined) throw new StoreConflictError("Task changed in another request.");
       const existingChecklist = await client.query<{
         completed: boolean;
+        delegateVisible: boolean;
         description: string | null;
+        id: string;
         label: string;
         position: number;
         predictedHours: number | null;
+        version: number;
       }>(
-        `SELECT label,description,predicted_hours::float8 AS "predictedHours",completed,position FROM opsweave.task_checklist_items
+        `SELECT id,label,description,predicted_hours::float8 AS "predictedHours",completed,position,
+          delegate_visible AS "delegateVisible",version FROM opsweave.task_checklist_items
          WHERE task_id=$1 ORDER BY position,id`,
         [taskId],
       );
       if (input.checklist !== undefined) {
-        await client.query("DELETE FROM opsweave.task_checklist_items WHERE task_id=$1", [taskId]);
-        for (const item of input.checklist)
-          await client.query(
-            "INSERT INTO opsweave.task_checklist_items (task_id,label,description,predicted_hours,completed,position) VALUES ($1,$2,$3,$4,$5,$6)",
-            [
-              taskId,
-              item.label,
-              item.description ?? null,
-              item.predictedHours ?? null,
-              item.completed,
-              item.position,
-            ],
-          );
+        const retainedIds = input.checklist.flatMap((item) =>
+          item.id !== undefined &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+            item.id,
+          )
+            ? [item.id]
+            : [],
+        );
+        await client.query(
+          `DELETE FROM opsweave.task_checklist_items WHERE task_id=$1
+           AND NOT (id=ANY($2::uuid[]))`,
+          [taskId, retainedIds],
+        );
+        await client.query(
+          "UPDATE opsweave.task_checklist_items SET position=position+10001 WHERE task_id=$1",
+          [taskId],
+        );
+        for (const item of input.checklist) {
+          const updated =
+            item.id === undefined || !retainedIds.includes(item.id)
+              ? { rowCount: 0 }
+              : await client.query(
+                  `UPDATE opsweave.task_checklist_items SET label=$3,description=$4,
+                    predicted_hours=$5,completed=$6,position=$7,delegate_visible=$8,
+                    version=version+1,updated_at=now()
+                   WHERE id=$2 AND task_id=$1`,
+                  [
+                    taskId,
+                    item.id,
+                    item.label,
+                    item.description ?? null,
+                    item.predictedHours ?? null,
+                    item.completed,
+                    item.position,
+                    item.delegateVisible ?? false,
+                  ],
+                );
+          if (updated.rowCount === 0) {
+            await client.query(
+              `INSERT INTO opsweave.task_checklist_items
+                (task_id,label,description,predicted_hours,completed,position,
+                 created_by_user_id,delegate_visible)
+               VALUES ($1,$2,$3,$4,$5,$6,
+                 (SELECT user_id FROM opsweave.owners WHERE id=$7),$8)`,
+              [
+                taskId,
+                item.label,
+                item.description ?? null,
+                item.predictedHours ?? null,
+                item.completed,
+                item.position,
+                ownerId,
+                item.delegateVisible ?? false,
+              ],
+            );
+          }
+        }
       }
       await this.syncTaskAttachmentRetention(client, workspaceId, taskId);
       const changes = auditChanges(
@@ -2186,9 +2658,11 @@ export class OpsWeaveStore {
         input.checklist !== undefined &&
         JSON.stringify(
           existingChecklist.rows.map(
-            ({ completed, description, label, position, predictedHours }) => ({
+            ({ completed, delegateVisible, description, id, label, position, predictedHours }) => ({
               completed,
+              delegateVisible,
               description,
+              id,
               label,
               position,
               predictedHours,
@@ -2196,16 +2670,59 @@ export class OpsWeaveStore {
           ),
         ) !==
           JSON.stringify(
-            input.checklist.map(({ completed, description, label, position, predictedHours }) => ({
-              completed,
-              description: description ?? null,
-              label,
-              position,
-              predictedHours: predictedHours ?? null,
-            })),
+            input.checklist.map(
+              ({
+                completed,
+                delegateVisible,
+                description,
+                id,
+                label,
+                position,
+                predictedHours,
+              }) => ({
+                completed,
+                delegateVisible: delegateVisible ?? false,
+                description: description ?? null,
+                id: id ?? null,
+                label,
+                position,
+                predictedHours: predictedHours ?? null,
+              }),
+            ),
           )
       )
         changes.subtasks = { from: existingChecklist.rows, to: input.checklist };
+      if (
+        ["clientName", "definitionOfDone", "notes", "projectId", "title", "workDescription"].some(
+          (field) => field in changes,
+        )
+      ) {
+        await client.query(
+          `UPDATE opsweave.delegate_entity_presentations presentation SET status='stale',
+            approved_by_user_id=NULL,approved_at=NULL,version=presentation.version+1,updated_at=now()
+           FROM opsweave.tasks task LEFT JOIN opsweave.projects project ON project.id=task.project_id
+           WHERE presentation.subject_task_id=task.id AND task.id=$1 AND task.workspace_id=$2
+             AND (task.anonymise_delegation OR coalesce(project.anonymise_delegation,false))
+             AND presentation.status='approved'`,
+          [taskId, workspaceId],
+        );
+        await client.query(
+          `INSERT INTO opsweave.protected_terms
+            (workspace_id,context_task_id,term_type,value,normalized_value,created_by_user_id)
+           SELECT $2,$1,candidate.term_type,candidate.value,lower(trim(candidate.value)),owner.user_id
+           FROM opsweave.tasks task
+           JOIN opsweave.owners owner ON owner.id=$3 AND owner.workspace_id=$2
+           LEFT JOIN opsweave.projects project ON project.id=task.project_id
+           CROSS JOIN LATERAL (VALUES ('other'::varchar,task.title),
+             ('client'::varchar,task.client_name),('company'::varchar,project.name),
+             ('client'::varchar,project.client_name)) candidate(term_type,value)
+           WHERE task.id=$1 AND task.workspace_id=$2
+             AND (task.anonymise_delegation OR coalesce(project.anonymise_delegation,false))
+             AND candidate.value IS NOT NULL AND length(trim(candidate.value))>=2
+           ON CONFLICT DO NOTHING`,
+          [taskId, workspaceId, ownerId],
+        );
+      }
       await audit(client, {
         action: "task.updated",
         actorOwnerId: ownerId,
@@ -2244,11 +2761,14 @@ export class OpsWeaveStore {
         ...task,
         checklist: (input.checklist ?? []).map((item, index) => ({
           completed: item.completed,
+          createdByUserId: null,
+          delegateVisible: item.delegateVisible ?? false,
           description: item.description ?? null,
-          id: `updated-${String(index)}`,
+          id: item.id ?? `updated-${String(index)}`,
           label: item.label,
           position: item.position,
           predictedHours: item.predictedHours ?? null,
+          version: 1,
         })),
       };
     });
@@ -2604,6 +3124,17 @@ export class OpsWeaveStore {
     return result.rows;
   }
 
+  public async listProjectDirectTimeTotals(workspaceId: string): Promise<Record<string, number>> {
+    const result = await this.pool.query<{ hours: number; projectId: string }>(
+      `SELECT entry.project_id AS "projectId",coalesce(sum(entry.hours),0)::float8 AS hours
+       FROM opsweave.task_time_entries entry
+       JOIN opsweave.projects project ON project.id=entry.project_id
+       WHERE project.workspace_id=$1 GROUP BY entry.project_id`,
+      [workspaceId],
+    );
+    return Object.fromEntries(result.rows.map((row) => [row.projectId, row.hours]));
+  }
+
   public async replaceTaskChecklist(
     workspaceId: string,
     ownerId: string,
@@ -2782,9 +3313,11 @@ export class OpsWeaveStore {
       );
       if (task.rowCount !== 1) throw new StoreConflictError("Task is unavailable.");
       await client.query(
-        `INSERT INTO opsweave.task_time_entries (task_id,entry_date,description,hours)
-         VALUES ($1,$2,$3,$4)`,
-        [taskId, input.entryDate, input.description, input.hours],
+        `INSERT INTO opsweave.task_time_entries
+          (task_id,user_id,entry_date,description,hours)
+         SELECT $1,owner.user_id,$2,$3,$4 FROM opsweave.owners owner
+         WHERE owner.id=$5 AND owner.workspace_id=$6`,
+        [taskId, input.entryDate, input.description, input.hours, ownerId, workspaceId],
       );
       await client.query(
         `UPDATE opsweave.tasks task SET hours_spent=totals.spent,
@@ -2917,8 +3450,10 @@ export class OpsWeaveStore {
         throw new StoreConflictError("The attachment target is unavailable.");
       const result = await client.query<AttachmentRecord>(
         `INSERT INTO opsweave.attachments
-          (workspace_id,entity_type,entity_id,original_name,storage_key,content_type,byte_size)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
+          (workspace_id,entity_type,entity_id,original_name,storage_key,content_type,byte_size,
+           uploaded_by_user_id,approved_by_user_id,approved_at)
+         SELECT $1,$2,$3,$4,$5,$6,$7,owner.user_id,owner.user_id,now()
+         FROM opsweave.owners owner WHERE owner.id=$8 AND owner.workspace_id=$1
          RETURNING id,workspace_id AS "workspaceId",entity_type AS "entityType",entity_id AS "entityId",
           original_name AS "originalName",storage_key AS "storageKey",content_type AS "contentType",
           byte_size::float8 AS "byteSize",purge_after AS "purgeAfter",created_at AS "createdAt"`,
@@ -2930,6 +3465,7 @@ export class OpsWeaveStore {
           input.storageKey,
           input.contentType,
           input.byteSize,
+          ownerId,
         ],
       );
       if (input.entityType === "task")

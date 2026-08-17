@@ -24,6 +24,7 @@ export const optionalFormNumber = (value: FormDataEntryValue | null): number | n
 
 const automationReasonLabels = new Map<string, string>([
   ["blocked", "blocked by unfinished dependencies"],
+  ["delegated_external_capacity", "assigned to external delegates"],
   ["capacity_or_task_mix", "outside the available capacity or task mix"],
   ["effort_not_set", "without an effort estimate"],
   ["no_remaining_effort", "with no remaining effort"],

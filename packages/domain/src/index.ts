@@ -27,6 +27,59 @@ export {
   type SessionTimes,
 } from "./auth/session.ts";
 export { SafeApplicationError, safeErrorResponse, type SafeErrorCode } from "./errors.ts";
+export {
+  decryptInvitationPayload,
+  encryptInvitationPayload,
+  isInvitationEncryptionAvailable,
+} from "./invitation-envelope.ts";
+export {
+  ACCESS_GRANT_STATUSES,
+  ACCESS_ROLES,
+  ACCESS_SUBJECT_TYPES,
+  ATTACHMENT_VISIBILITIES,
+  DELEGATE_STAGE_KINDS,
+  MEMBERSHIP_STATUSES,
+  WORKSPACE_ROLES,
+  delegateStageCreateSchema,
+  delegatePresentationSchema,
+  delegateProjectTaskCreateSchema,
+  delegateSubtaskCreateSchema,
+  delegateSubtaskUpdateSchema,
+  collaborationFlagsSchema,
+  attachmentSharingSchema,
+  delegateStateUpdateSchema,
+  taskDelegateSharingSchema,
+  delegationCreateSchema,
+  delegationUpdateSchema,
+  hasWorkspaceCapability,
+  invitationAcceptSchema,
+  isGrantActive,
+  normalizeEmail,
+  type AccessGrantStatus,
+  type AccessRole,
+  type AccessSubjectType,
+  type Capability,
+  type DelegateStageKind,
+  type DelegateStateUpdateInput,
+  type DelegationCreateInput,
+  type DelegationUpdateInput,
+  type MembershipStatus,
+  type Principal,
+  type WorkspaceRole,
+} from "./access.ts";
+export {
+  ACTIVITY_KINDS,
+  ACTIVITY_VISIBILITIES,
+  activityCreateSchema,
+  activityQuerySchema,
+  type ActivityCreateInput,
+} from "./activity.ts";
+export {
+  containsProtectedTerm,
+  createDelegationAlias,
+  findProtectedContactMatches,
+  protectedContactPatterns,
+} from "./anonymisation.ts";
 export { REDACTED_VALUE, redactSensitiveValues } from "./security/redaction.ts";
 export {
   WEEKDAYS,
@@ -80,6 +133,7 @@ export {
   taskSizeForHours,
   taskSplitSchema,
   taskTimeEntryCreateSchema,
+  timeEntryUpdateSchema,
   taskUpdateSchema,
   toSafeMermaidLabel,
   transitiveBlockerIds,

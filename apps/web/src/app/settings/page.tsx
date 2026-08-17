@@ -3,15 +3,16 @@ import Link from "next/link";
 import { LogoutButton } from "../../components/logout-button";
 import { SettingsWorkspace } from "../../components/settings-workspace";
 import { getCurrentSession } from "../../server/current-session";
-import { getStore } from "../../server/runtime";
+import { getCollaborationStore, getStore } from "../../server/runtime";
 import { SettingsService } from "../../server/settings-service";
 
 export default async function SettingsPage() {
   const session = await getCurrentSession();
   const store = getStore();
-  const [data, stages] = await Promise.all([
+  const [data, stages, collaboration] = await Promise.all([
     new SettingsService(store).read(session),
     store.listProjectStages(session.workspaceId),
+    getCollaborationStore().getCollaborationFlags(session.workspaceId),
   ]);
   const serializable = JSON.parse(JSON.stringify(data)) as Parameters<
     typeof SettingsWorkspace
@@ -25,11 +26,14 @@ export default async function SettingsPage() {
         </div>
         <nav aria-label="Primary navigation">
           <Link href="/">Workspace</Link>
+          <Link href="/delegations">Delegations</Link>
+          <Link href="/notifications">Notifications</Link>
           <LogoutButton />
         </nav>
       </header>
       <SettingsWorkspace
         initial={serializable}
+        initialCollaboration={collaboration}
         stages={
           JSON.parse(JSON.stringify(stages)) as NonNullable<
             Parameters<typeof SettingsWorkspace>[0]["stages"]

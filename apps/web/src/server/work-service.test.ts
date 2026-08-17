@@ -24,6 +24,7 @@ const createStore = () => ({
   listEntityAuditEvents: vi.fn(async () => []),
   listAttachments: vi.fn(async () => []),
   listProjectDependencies: vi.fn(async () => []),
+  listProjectDirectTimeTotals: vi.fn(async () => new Map()),
   listTaskDependencies: vi.fn(async () => []),
   listProjects: vi.fn(async () => [{ id: projectId }]),
   listTasks: vi.fn(async () => [{ id: taskId }]),

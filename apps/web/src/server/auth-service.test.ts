@@ -1,5 +1,11 @@
 import { hashPassword, type SessionTimes } from "@opsweave/domain";
-import type { OpsWeaveStore, OwnerCredentialRecord, SessionRecord } from "@opsweave/db";
+import type {
+  OpsWeaveStore,
+  OwnerCredentialRecord,
+  PrincipalSessionRecord,
+  SessionRecord,
+  UserCredentialRecord,
+} from "@opsweave/db";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { AuthService } from "./auth-service";
@@ -37,27 +43,70 @@ const activeSession = (overrides: Partial<SessionRecord> = {}): SessionRecord =>
   ...overrides,
 });
 
+const userCredential = (): UserCredentialRecord => ({
+  authorizationVersion: 1,
+  credentialVersion: owner.credentialVersion,
+  email: null,
+  fullName: "Synthetic Owner",
+  membershipAuthorizationVersion: 1,
+  membershipId: "00000000-0000-4000-8000-000000000004",
+  membershipStatus: "active",
+  normalizedEmail: null,
+  normalizedUsername: owner.normalizedUsername,
+  ownerId: owner.ownerId,
+  passwordChangedAt: owner.passwordChangedAt,
+  passwordHash: owner.passwordHash,
+  role: "owner",
+  userId: "00000000-0000-4000-8000-000000000005",
+  userStatus: "active",
+  username: owner.username,
+  workspaceId: owner.workspaceId,
+});
+
+const principalSession = (
+  session: SessionRecord,
+  overrides: Partial<PrincipalSessionRecord> = {},
+): PrincipalSessionRecord => ({
+  ...session,
+  authorizationVersion: 1,
+  email: null,
+  fullName: "Synthetic Owner",
+  membershipAuthorizationVersion: 1,
+  membershipId: "00000000-0000-4000-8000-000000000004",
+  membershipStatus: "active",
+  role: "owner",
+  userId: "00000000-0000-4000-8000-000000000005",
+  userStatus: "active",
+  ...overrides,
+});
+
 const createHarness = () => {
   let session = activeSession();
   const consumeAccount = vi.fn(async () => undefined);
   const store = {
-    changePassword: vi.fn(async (input: { times: SessionTimes; tokenDigest: string }) => {
+    changeUserPassword: vi.fn(async (input: { times: SessionTimes; tokenDigest: string }) => {
       session = activeSession({ ...input.times, tokenDigest: input.tokenDigest });
-      return session;
+      return principalSession(session);
     }),
-    createSession: vi.fn(async (_owner, tokenDigest: string, times: SessionTimes) => {
+    createPrincipalSession: vi.fn(async (_owner, tokenDigest: string, times: SessionTimes) => {
       session = activeSession({ ...times, tokenDigest });
-      return session;
+      return principalSession(session);
     }),
-    findOwnerForLogin: vi.fn(async (normalized: string) =>
-      normalized === owner.normalizedUsername ? owner : null,
+    findUserForLogin: vi.fn(async (normalized: string) =>
+      normalized === owner.normalizedUsername ? userCredential() : null,
     ),
-    findSessionByDigest: vi.fn(async (digest: string) =>
-      digest === session.tokenDigest ? session : null,
+    findPrincipalSessionByDigest: vi.fn(async (digest: string) =>
+      digest === session.tokenDigest ? principalSession(session) : null,
     ),
+    getUserCredentialById: vi.fn(async () => userCredential()),
     getOnlyOwnerCredential: vi.fn(async () => owner),
+    getOnlyUserCredential: vi.fn(async () => userCredential()),
+    getWorkspaceOwnerCompatibility: vi.fn(async () => ({
+      ownerId: owner.ownerId,
+      username: owner.username,
+    })),
     recordLoginAttempt: vi.fn(async () => undefined),
-    revokeOtherSessions: vi.fn(async () => 2),
+    revokeOtherUserSessions: vi.fn(async () => 2),
     revokeSession: vi.fn(async () => undefined),
     touchSession: vi.fn(async () => undefined),
   };
@@ -80,7 +129,7 @@ describe("AuthService", () => {
     const { service, store } = createHarness();
     const result = await service.login(" SYNTHETIC-OWNER ", "synthetic owner password", "client");
     expect(result.token).toHaveLength(43);
-    expect(store.createSession).toHaveBeenCalledOnce();
+    expect(store.createPrincipalSession).toHaveBeenCalledOnce();
     expect(store.recordLoginAttempt).toHaveBeenLastCalledWith(
       expect.any(String),
       expect.any(String),
@@ -123,12 +172,28 @@ describe("AuthService", () => {
     await expect(harness.service.authenticateToken(login.token)).resolves.toMatchObject({
       ownerId: owner.ownerId,
     });
+    harness.store.findPrincipalSessionByDigest.mockResolvedValueOnce(
+      principalSession(activeSession(), {
+        email: "admin@example.test",
+        ownerId: null,
+        role: "admin",
+        username: null,
+      }),
+    );
+    await expect(harness.service.authenticateToken(login.token)).resolves.toMatchObject({
+      ownerId: owner.ownerId,
+      username: "admin@example.test",
+    });
     await expect(harness.service.authenticateToken(null)).rejects.toMatchObject({ status: 401 });
-    harness.store.findSessionByDigest.mockResolvedValueOnce(activeSession({ revokedAt: now }));
+    harness.store.findPrincipalSessionByDigest.mockResolvedValueOnce(
+      principalSession(activeSession({ revokedAt: now })),
+    );
     await expect(harness.service.authenticateToken(login.token)).rejects.toMatchObject({
       status: 401,
     });
-    harness.store.findSessionByDigest.mockResolvedValueOnce(activeSession({ idleExpiresAt: now }));
+    harness.store.findPrincipalSessionByDigest.mockResolvedValueOnce(
+      principalSession(activeSession({ idleExpiresAt: now })),
+    );
     await expect(harness.service.authenticateToken(login.token)).rejects.toMatchObject({
       status: 401,
     });
@@ -136,7 +201,7 @@ describe("AuthService", () => {
 
   it("requires the current password, rotates the current session, and revokes others", async () => {
     const harness = createHarness();
-    const session = activeSession();
+    const session = principalSession(activeSession());
     await expect(
       harness.service.changePassword({
         currentPassword: "wrong password",
@@ -152,7 +217,7 @@ describe("AuthService", () => {
       session,
     });
     expect(changed.token).not.toBe("");
-    expect(harness.store.changePassword).toHaveBeenCalledOnce();
+    expect(harness.store.changeUserPassword).toHaveBeenCalledOnce();
     await expect(harness.service.revokeOthers(session)).resolves.toBe(2);
   });
 });

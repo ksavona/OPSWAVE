@@ -2,10 +2,35 @@
 
 ## Implementation plan
 
-Status: Proposed for implementation review  
-Code baseline reviewed: `c583ce6` (`agent/phase-4-ai-intake`)  
-Remote restore point: [draft PR #4](https://github.com/ksavona/OPSWAVE/pull/4)  
-Scope of this document: architecture and implementation plan only; no multi-user runtime behavior is enabled by this document.
+Status: Implemented on `agent/phase-4-ai-intake`; rollout remains feature-flagged
+Code baseline reviewed: `c583ce6` (`agent/phase-4-ai-intake`)
+Remote restore point: [draft PR #4](https://github.com/ksavona/OPSWAVE/pull/4)
+Implementation date: 17 August 2026
+
+## Implementation status
+
+The additive identity, Access Grant, invitation, delegation, private Kanban, task-sharing,
+anonymisation, document-audience, activity, notification, timesheet, user-administration,
+compliance, worker, and owner-review changes described below are implemented. Existing owner
+records and compatibility columns remain in place; no destructive contract migration was used.
+
+Runtime enablement is controlled from Collaboration settings. Invitation email requires the
+deployment encryption key and email webhook, and delegate uploads remain fail-closed until the
+malware scanner endpoint is configured. These are deployment controls, not replacement API keys;
+the existing OpenAI key is reused unchanged.
+
+The original restore point remains available in draft PR #4 history. The implementation commit is
+added to the same branch only after the complete unit, integration, lint, formatting, secret,
+repository, and production-build checks pass.
+
+### Validation evidence
+
+- 205 unit/component tests pass across 48 files.
+- Coverage passes the enforced 80% gates: 91.94% statements, 80.18% branches, 90.82% functions, and 93.30% lines.
+- 19 PostgreSQL integration scenarios pass from a zero-schema migration, including invitation expiry, independent grants, immediate revocation, document audiences, notification privacy, retained history, alias isolation, and per-user credential rotation.
+- Five Chromium end-to-end scenarios pass against the production build with no application/database errors in the server log.
+- Formatting, ESLint, Markdown lint, TypeScript, secret scanning, repository hygiene, production build, license policy, and production dependency audit pass.
+- The repository pins Node.js 24.19.0. The validation host currently emits an engine warning under Node.js 22.22.3; deployment must use the pinned runtime.
 
 ## 1. Executive recommendation
 
@@ -895,18 +920,16 @@ The implementation is not complete until automated tests demonstrate all of thes
 
 - Authentication, security/threat model, data flow, invitations, permissions, anonymisation, document policy, notification delivery, compliance review, deployment, backup/restore, incident response, and test documentation
 
-## 17. Decisions to confirm before implementation starts
+## 17. Recorded implementation and operational decisions
 
-These do not block this architecture plan, but they must be recorded before the relevant phase is enabled:
+- Invitation delivery uses a durable encrypted outbox plus a server-side authenticated webhook adapter. Without the deployment key/webhook, invitations remain manual copy-link delivery.
+- Delegate uploads are workspace-controlled and remain unavailable unless the malware scanner endpoint is configured and returns an explicit clean decision.
+- Invitation links expire after 72 hours. Grant expiry is optional and owner/admin controlled.
+- The current one-workspace model archives the user's membership/account together while preserving identity and history; a future multi-workspace contract migration must split those lifecycle semantics.
+- Delegate uploads are controlled by the workspace-level upload flag and current subject access; reviewers remain unable to create/reassign delivery work.
+- Owner alerts are materialised idempotently for overdue work, Waiting for input beyond 24 hours, Ready for review, and grants expiring within 48 hours.
+- The reviewed adjective/animal generator produces a random three-digit contextual alias. Neutral safe-presentation labels are owner-approved before release.
 
-- Production email transport and sender domain. Implement a provider interface and durable outbox; select SMTP or a transactional adapter operationally.
-- Malware scanner/redaction tooling. Delegate upload remains disabled if a scanner is not configured.
-- Exact default invitation lifetime and maximum Access Grant lifetime.
-- Whether admins may archive a global user or only that user's membership when multi-workspace support arrives.
-- Whether reviewers may upload documents by default or only when the owner enables it on the grant.
-- Owner notification preferences and alert thresholds for overdue/blocked/near-expiry work.
-- The reviewed adjective/animal alias dictionaries and neutral Client/Project naming dictionaries.
+## 18. Implemented release sequence
 
-## 18. Recommended first implementation slice
-
-Begin only with Phase 0 and Phase 1: contracts, regression baseline, unified users/memberships, and owner compatibility. Do not create invitations or expose delegate sessions until the centralized authorization phase has complete negative tests. This sequencing produces a safe identity foundation, keeps the current owner application functional, and creates a clean rollback point before any external access exists.
+The implementation followed the planned expand-first sequence: restore point, additive schema and owner backfill, unified authentication, central authorization, invitations/grants, private delegate workspace, anonymised projections/documents, Chatter/timesheets/notifications, compliance and workers, then UI integration and regression validation. Feature flags remain available for controlled rollout; no destructive legacy cleanup is included.

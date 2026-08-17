@@ -81,6 +81,8 @@ const run = async (operation: () => Promise<Response>): Promise<Response> => {
   }
 };
 
+export const requirePrincipal = async (request: Request) =>
+  auth().authenticatePrincipalToken(readCookie(request));
 const requireSession = async (request: Request) => auth().authenticateToken(readCookie(request));
 
 export const loginHandler = (request: Request) =>
@@ -88,25 +90,34 @@ export const loginHandler = (request: Request) =>
     assertSameOrigin(request);
     const input = await objectBody(request);
     const session = await auth().login(input.username, input.password, getNetworkSignal(request));
-    return json({ authenticated: true, username: session.record.username }, 200, {
-      "set-cookie": createSessionCookie(session.token, session.maxAgeSeconds),
-    });
+    return json(
+      {
+        authenticated: true,
+        role: session.record.role,
+        username: session.record.username ?? session.record.email,
+      },
+      200,
+      {
+        "set-cookie": createSessionCookie(session.token, session.maxAgeSeconds),
+      },
+    );
   });
 
 export const logoutHandler = (request: Request) =>
   run(async () => {
     assertSameOrigin(request);
-    await auth().logout(await requireSession(request));
+    await auth().logout(await requirePrincipal(request));
     return json({ authenticated: false }, 200, { "set-cookie": clearSessionCookie() });
   });
 
 export const sessionHandler = (request: Request) =>
   run(async () => {
-    const session = await requireSession(request);
+    const session = await requirePrincipal(request);
     return json({
       authenticated: true,
       createdAt: session.createdAt,
       lastSeenAt: session.lastSeenAt,
+      role: session.role,
       username: session.username,
     });
   });
@@ -176,7 +187,7 @@ export const changePasswordHandler = (request: Request) =>
       currentPassword: input.currentPassword,
       newPassword: input.newPassword,
       newPasswordConfirmation: input.newPasswordConfirmation,
-      session: await requireSession(request),
+      session: await requirePrincipal(request),
     });
     return json({ changed: true }, 200, {
       "set-cookie": createSessionCookie(rotated.token, rotated.maxAgeSeconds),
@@ -186,22 +197,23 @@ export const changePasswordHandler = (request: Request) =>
 export const revokeOtherSessionsHandler = (request: Request) =>
   run(async () => {
     assertSameOrigin(request);
-    const revokedCount = await auth().revokeOthers(await requireSession(request));
+    const revokedCount = await auth().revokeOthers(await requirePrincipal(request));
     return json({ revokedCount });
   });
 
 export const securitySettingsHandler = (request: Request) =>
   run(async () => {
-    const session = await requireSession(request);
-    const owner = await getStore().getOnlyOwnerCredential();
-    if (owner === null) throw new Error("Owner record missing.");
+    const session = await requirePrincipal(request);
+    const user = await getStore().getUserCredentialById(session.workspaceId, session.userId);
+    if (user === null) throw new Error("User record missing.");
     return json({
-      otherActiveSessionCount: await getStore().countOtherActiveSessions(
-        session.ownerId,
+      otherActiveSessionCount: await getStore().countOtherActiveUserSessions(
+        session.userId,
+        session.workspaceId,
         session.id,
         new Date(),
       ),
-      passwordChangedAt: owner.passwordChangedAt,
+      passwordChangedAt: user.passwordChangedAt,
       sessionCreatedAt: session.createdAt,
       sessionLastSeenAt: session.lastSeenAt,
       username: session.username,

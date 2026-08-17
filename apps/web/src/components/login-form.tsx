@@ -19,13 +19,13 @@ export const LoginForm = () => {
       headers: { "content-type": "application/json" },
       method: "POST",
     });
-    const result = (await response.json()) as { message?: string };
+    const result = (await response.json()) as { message?: string; role?: string };
     if (!response.ok) {
       setStatus(response.status === 429 ? "limited" : "error");
       setMessage(result.message ?? "The username or password is invalid.");
       return;
     }
-    router.replace("/");
+    router.replace(result.role === "delegate" ? "/delegated" : "/");
     router.refresh();
   };
 
@@ -36,7 +36,7 @@ export const LoginForm = () => {
         void submit(event);
       }}
     >
-      <label htmlFor="username">Username</label>
+      <label htmlFor="username">Username or email</label>
       <input autoComplete="username" id="username" name="username" required />
       <label htmlFor="password">Password</label>
       <div className="password-field">

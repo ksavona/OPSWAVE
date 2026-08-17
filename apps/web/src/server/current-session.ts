@@ -14,3 +14,14 @@ export const getCurrentSession = async () => {
     redirect("/login");
   }
 };
+
+export const getCurrentPrincipal = async () => {
+  const token = (await cookies()).get(SESSION_COOKIE_NAME)?.value ?? null;
+  try {
+    return await new AuthService(getStore(), createRateLimitGate()).authenticatePrincipalToken(
+      token,
+    );
+  } catch {
+    redirect("/login");
+  }
+};

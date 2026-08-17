@@ -11,6 +11,8 @@ No supported production deployment exists. This document records constraints for
 - One PostgreSQL 18 database.
 - One external TLS reverse proxy or managed ingress.
 - One deployment secret store for database credentials, the rate-limit pepper, and the AI credential master key.
+- Durable private attachment storage mounted at the same configured path for the web retention workflow.
+- A server-side invitation email transport and, before delegate uploads are enabled, a fail-closed malware scanner.
 
 The processes form a modular monolith and may share a release artifact, but web and worker lifecycles remain independent.
 
@@ -27,6 +29,9 @@ The processes form a modular monolith and may share a release artifact, but web 
 - Durable worker restart policy and idempotent missed-run handling.
 - Encrypted, monitored backups with exercised restores.
 - Separate storage and custody for the AI credential master key.
+- Shared web/worker custody for the invitation-link encryption key, with queue draining before rotation.
+- Email webhook authentication plus SPF, DKIM, and DMARC on the sending domain.
+- Malware scanner monitoring; delegate uploads remain disabled whenever scanning is unavailable.
 - Log redaction, retention, access controls, and correlation identifiers.
 - Resource limits, dependency scanning, pinned base images, and documented rollback.
 - Migration execution as an explicit release step, not an uncontrolled app-start side effect.

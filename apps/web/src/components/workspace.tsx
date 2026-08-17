@@ -114,11 +114,26 @@ const ClientField = ({
   );
 };
 
-export const Workspace = ({ initial }: { initial: WorkspaceData }) => {
+export const Workspace = ({
+  initial,
+  initialOpenRecord = null,
+}: {
+  initial: WorkspaceData;
+  initialOpenRecord?: OpenRecord;
+}) => {
   const [data, setData] = useState(initial);
   const [automationRunning, setAutomationRunning] = useState<"daily" | "weekly" | null>(null);
   const [message, setMessage] = useState("");
-  const [openRecord, setOpenRecord] = useState<OpenRecord>(null);
+  const [openRecord, setOpenRecord] = useState<OpenRecord>(() => {
+    if (initialOpenRecord === null) return null;
+    return initialOpenRecord.type === "task"
+      ? initial.tasks.some((task) => task.id === initialOpenRecord.id)
+        ? initialOpenRecord
+        : null
+      : initial.projects.some((project) => project.id === initialOpenRecord.id)
+        ? initialOpenRecord
+        : null;
+  });
   const [selection, setSelection] = useState<Selection>(null);
   const [projectSearch, setProjectSearch] = useState("");
   const [projectCondensed, setProjectCondensed] = useState(true);
@@ -1202,7 +1217,7 @@ const TaskCard = ({
     <div
       aria-label={`Task: ${task.title}`}
       aria-pressed={selected}
-      className={`task-card compact-card status-${task.status ?? "not_started"}${selected ? " selected" : ""}${deadline.overdue ? " overdue" : ""}`}
+      className={`task-card compact-card status-${task.status ?? "not_started"}${selected ? " selected" : ""}${deadline.overdue ? " overdue" : ""}${task.delegateReviewPending ? " delegate-review-pending" : ""}`}
       data-selectable-card
       draggable
       onClick={(event) => {
@@ -1236,6 +1251,9 @@ const TaskCard = ({
       }
       tabIndex={0}
     >
+      {task.delegateReviewPending ? (
+        <span className="review-ready-badge">Ready for review</span>
+      ) : null}
       <h4>{task.title}</h4>
       <dl className="task-card-facts">
         <div>

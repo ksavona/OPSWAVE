@@ -4,6 +4,7 @@
   --foreground: #edf7f2;
   --muted: #99aaa2;
   --surface: #0e151c;
+  --surface-deep: #0a1117;
   --panel: #111b23;
   --surface-raised: #16222c;
   --border: #2a3a43;
@@ -12,6 +13,393 @@
   --on-accent: #06130e;
   --danger: #ef6b73;
   --focus: #79b8ff;
+}
+
+.collaboration-layout {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(20rem, 0.8fr) minmax(0, 1.2fr);
+}
+
+.collaboration-layout .span-full {
+  grid-column: 1 / -1;
+}
+
+.delegation-form {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.delegation-form label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.delegation-form .span-two {
+  grid-column: 1 / -1;
+}
+
+.delegation-form .checkbox-row {
+  align-items: center;
+  display: flex;
+  gap: 0.55rem;
+}
+
+.delegation-form .checkbox-row input {
+  width: auto;
+}
+
+.section-heading-row {
+  align-items: flex-start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.section-heading-row h1,
+.section-heading-row h2,
+.section-heading-row h3 {
+  margin-bottom: 0;
+}
+
+.status-pill,
+.scope-badge {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 999px;
+  color: var(--accent);
+  display: inline-flex;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 0.2rem 0.5rem;
+  text-transform: uppercase;
+}
+
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.delegation-table {
+  min-width: 68rem;
+  width: 100%;
+}
+
+.delegation-table th,
+.delegation-table td {
+  text-align: left;
+  vertical-align: top;
+}
+
+.table-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.secure-link-box {
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.8rem;
+}
+
+.secure-link-box > div {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+}
+
+.secure-link-box input {
+  flex: 1;
+  min-width: 0;
+}
+
+.invitation-card {
+  max-width: 36rem;
+}
+
+.invitation-summary {
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  margin: 1rem 0;
+  padding: 1rem;
+}
+
+.delegate-board-shell,
+.notification-list {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 1.25rem;
+}
+
+.delegate-board {
+  display: grid;
+  gap: 0.8rem;
+  grid-auto-columns: minmax(17rem, 1fr);
+  grid-auto-flow: column;
+  margin-top: 1rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
+
+.delegate-column {
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  border-top: 0.22rem solid var(--accent);
+  min-height: 18rem;
+  padding: 0.75rem;
+}
+
+.delegate-column > header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.delegate-column > header h3 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.delegate-card-list {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+}
+
+.delegate-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  padding: 0.8rem;
+}
+
+.delegate-card h4 {
+  margin: 0.25rem 0 0.6rem;
+}
+
+.delegate-card label,
+.delegate-card form {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.65rem;
+}
+
+.delegate-card-meta {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  gap: 0.45rem 0.8rem;
+}
+
+.delegate-projects {
+  margin-top: 1.25rem;
+}
+
+.delegate-project-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+}
+
+.delegate-task-details {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.8rem;
+  padding-top: 0.8rem;
+}
+
+.delegate-task-details form,
+.delegate-timesheet-form {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.delegate-activity-list {
+  display: grid;
+  gap: 0.55rem;
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+}
+
+.delegate-activity-list li {
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.65rem;
+}
+
+.delegate-activity-list li > span,
+.delegate-activity-list li > em {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.delegate-subtasks,
+.delegate-subtask-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.delegate-subtask-list > form,
+.delegate-subtask-list > article {
+  align-items: start;
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.65rem;
+}
+
+.delegate-subtask-list > article > span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.subject-delegations,
+.delegation-progress-panel,
+.task-sharing-control,
+.anonymisation-control {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.task-sharing-control,
+.anonymisation-control,
+.delegation-progress-panel article {
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  padding: 0.8rem;
+}
+
+.task-sharing-control label,
+.task-sharing-control fieldset,
+.delegation-progress-panel article {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.delegation-progress-panel article > span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.activity-compose,
+.activity-filters,
+.activity-participants {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.activity-compose,
+.activity-filters {
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  padding: 0.8rem;
+}
+
+.activity-filters {
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+}
+
+.activity-participants {
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+}
+
+.activity-body {
+  margin: 0.35rem 0 0;
+  white-space: pre-wrap;
+}
+
+.activity-warning {
+  color: #facc15;
+  font-weight: 700;
+}
+
+.inline-stage-form {
+  align-items: end;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.inline-stage-form label {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.inline-stage-form input[type="color"] {
+  min-height: 2.7rem;
+  padding: 0.2rem;
+  width: 3rem;
+}
+
+.notification-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.notification-card {
+  align-items: flex-start;
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 1rem;
+}
+
+.notification-card.unread {
+  border-left: 0.25rem solid var(--accent);
+}
+
+.notification-card h3 {
+  margin: 0.2rem 0;
+}
+
+.notification-card time {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+@media (max-width: 50rem) {
+  .collaboration-layout,
+  .delegation-form {
+    grid-template-columns: 1fr;
+  }
+
+  .delegation-form .span-two,
+  .collaboration-layout .span-full {
+    grid-column: auto;
+  }
+
+  .section-heading-row,
+  .inline-stage-form,
+  .notification-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .activity-filters,
+  .delegate-project-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 * {
@@ -97,6 +485,37 @@ button.danger {
 button.compact {
   min-height: 2.4rem;
   padding: 0.45rem 0.7rem;
+}
+
+.button-link {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  color: var(--foreground);
+  display: inline-flex;
+  min-height: 2.4rem;
+  padding: 0.45rem 0.7rem;
+  text-decoration: none;
+}
+
+.button-link:hover {
+  background: var(--surface-raised);
+}
+
+.task-card.delegate-review-pending {
+  box-shadow: 0 0 0 2px #c084fc;
+}
+
+.review-ready-badge {
+  background: rgb(192 132 252 / 18%);
+  border: 1px solid #c084fc;
+  border-radius: 999px;
+  color: #e9d5ff;
+  display: inline-flex;
+  font-size: 0.72rem;
+  font-weight: 800;
+  margin-bottom: 0.45rem;
+  padding: 0.2rem 0.5rem;
 }
 
 button:focus-visible,
@@ -1451,13 +1870,31 @@ td {
 }
 .attachment-row {
   display: grid;
-  grid-template-columns: minmax(12rem, 1fr) auto auto auto;
+  grid-template-columns: minmax(12rem, 1fr) repeat(6, minmax(7rem, auto));
   align-items: center;
   gap: 0.75rem;
   padding: 0.7rem;
   border: 1px solid var(--border);
   border-radius: 0.55rem;
   background: var(--surface);
+}
+
+.document-sharing-controls {
+  align-items: end;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+}
+
+.document-sharing-controls label,
+.document-audience-picker,
+.attachment-audience {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.attachment-audience select[multiple] {
+  min-height: 4.75rem;
 }
 .focused-diagram {
   margin-bottom: 1rem;

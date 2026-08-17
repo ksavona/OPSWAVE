@@ -80,15 +80,19 @@ export interface Task {
   businessValueScore: number | null;
   checklist: {
     completed: boolean;
+    createdByUserId?: string | null;
+    delegateVisible?: boolean;
     description?: string | null;
     id: string;
     label: string;
     position: number;
     predictedHours?: number | null;
+    version?: number;
   }[];
   clientName?: string | null;
   createdAt: string;
   definitionOfDone: string | null;
+  delegateReviewPending?: boolean;
   dueDate: string | null;
   endTime?: string | null;
   hoursSpent: number | null;

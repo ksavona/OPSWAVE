@@ -1,5 +1,5 @@
 import { DeterministicFakeAiProvider, OpenAiProvider } from "@opsweave/ai";
-import { createDatabasePool, OpsWeaveStore } from "@opsweave/db";
+import { CollaborationStore, createDatabasePool, OpsWeaveStore } from "@opsweave/db";
 
 import { processOneIntakeJob } from "./intake-job.ts";
 import { purgeExpiredIntakeTrash } from "./intake-trash.ts";
@@ -7,6 +7,8 @@ import { runScheduledAutomations } from "./automation-scheduler.ts";
 import { createWorkerLogger } from "./logger.ts";
 import { getWorkerStatus } from "./status.ts";
 import { purgeExpiredAttachments } from "./attachment-retention.ts";
+import { processOneComplianceJob } from "./compliance-monitor.ts";
+import { configuredEmailTransport, processOneEmail } from "./email-outbox.ts";
 
 const logger = createWorkerLogger();
 const apiKey = process.env.OPENAI_API_KEY;
@@ -23,7 +25,10 @@ const databaseUrl = process.env.DATABASE_URL;
 if (databaseUrl === undefined || databaseUrl.length === 0) {
   logger.info(workerStatus, "Worker ready; DATABASE_URL is required to process intake jobs.");
 } else {
-  const store = new OpsWeaveStore(createDatabasePool(databaseUrl));
+  const pool = createDatabasePool(databaseUrl);
+  const store = new OpsWeaveStore(pool);
+  const collaboration = new CollaborationStore(pool);
+  const emailTransport = configuredEmailTransport();
   const drainIntake = async () => {
     while (await processOneIntakeJob(store, logger, provider)) {
       // Drain the durable queue before the next polling interval.
@@ -31,6 +36,7 @@ if (databaseUrl === undefined || databaseUrl.length === 0) {
   };
   let intakePollRunning = false;
   let automationPollRunning = false;
+  let collaborationPollRunning = false;
   const pollIntake = async () => {
     if (intakePollRunning) return;
     intakePollRunning = true;
@@ -49,11 +55,28 @@ if (databaseUrl === undefined || databaseUrl.length === 0) {
       automationPollRunning = false;
     }
   };
+  const pollCollaboration = async () => {
+    if (collaborationPollRunning) return;
+    collaborationPollRunning = true;
+    try {
+      while (await processOneEmail(collaboration, emailTransport, logger)) {
+        // Drain durable deliveries before returning to the polling interval.
+      }
+      while (await processOneComplianceJob(collaboration, provider, logger)) {
+        // Drain durable compliance work before returning to the polling interval.
+      }
+      await collaboration.materializeExpiredAccessGrants();
+      await collaboration.materializeDelegationAlerts();
+    } finally {
+      collaborationPollRunning = false;
+    }
+  };
   const recoveredCount = await store.recoverStaleIntakeRuns(new Date(Date.now() - 60 * 60 * 1_000));
   if (recoveredCount > 0)
     logger.warn({ recoveredCount }, "stale intake runs returned to the durable queue");
   await pollIntake();
   await pollAutomations();
+  await pollCollaboration();
   await purgeExpiredIntakeTrash(store, logger);
   await purgeExpiredAttachments(store, logger);
   setInterval(() => {
@@ -82,5 +105,13 @@ if (databaseUrl === undefined || databaseUrl.length === 0) {
       logger.error({ err: error }, "automation poll failed");
     });
   }, 30_000);
-  logger.info(workerStatus, "Worker is polling durable intake jobs and planning automations.");
+  setInterval(() => {
+    void pollCollaboration().catch((error: unknown) => {
+      logger.error({ err: error }, "collaboration worker poll failed");
+    });
+  }, 5_000);
+  logger.info(
+    workerStatus,
+    "Worker is polling durable intake, planning, email, expiry, and compliance jobs.",
+  );
 }

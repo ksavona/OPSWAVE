@@ -17,6 +17,8 @@ export {
   type AiMegaSplitItem,
   type AiMegaSplitRequest,
   type AiMegaSplitResult,
+  type AiComplianceRequest,
+  type AiComplianceResult,
   type AiProvider,
 } from "./provider.ts";
 export { readLearningMemory, writeLearningMemory } from "./learning-memory.ts";

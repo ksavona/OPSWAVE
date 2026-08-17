@@ -1,4 +1,29 @@
 export { createDatabase, createDatabasePool, type OpsWeaveDatabase } from "./client.ts";
+export {
+  CollaborationStore,
+  type AccessDecisionRecord,
+  type AccessGrantRecord,
+  type AccessGrantStatus,
+  type ActivityRecord,
+  type AccessRole,
+  type AccessSubjectType,
+  type CollaborationUserRecord,
+  type CollaborationFlagsRecord,
+  type CollaborationAttachmentRecord,
+  type ComplianceFlagRecord,
+  type ComplianceJobRecord,
+  type EmailOutboxRecord,
+  type CollaborationTimeEntryRecord,
+  type DelegateStageRecord,
+  type DelegatePresentationRecord,
+  type DelegateProjectRecord,
+  type DelegateTaskRecord,
+  type DelegateWorkspaceRecord,
+  type DelegationProgressRecord,
+  type InvitationRecord,
+  type NotificationRecord,
+  type SubjectParticipantRecord,
+} from "./collaboration-store.ts";
 export { opsweaveSchema, systemMetadata } from "./schema.ts";
 export {
   OpsWeaveStore,
@@ -22,6 +47,8 @@ export {
   type ProjectStageRecord,
   type PrioritizationSettingsInput,
   type ProviderCredentialStatus,
+  type PrincipalSessionRecord,
+  type AccountStatus,
   type SessionRecord,
   type SessionTimes,
   type StoredCredentialEnvelope,
@@ -34,4 +61,6 @@ export {
   type TaskTimeEntryRecord,
   type WorkingDayInput,
   type WorkspaceConfiguration,
+  type UserCredentialRecord,
+  type WorkspaceRole,
 } from "./store.ts";

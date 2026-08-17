@@ -22,9 +22,83 @@ describe("DeterministicFakeAiProvider", () => {
     });
     expect(first.sourceFingerprint).toHaveLength(64);
   });
+
+  it("flags synthetic off-platform solicitation without external access", async () => {
+    const provider = new DeterministicFakeAiProvider();
+    await expect(
+      provider.assessCompliance({
+        content: "Please contact me outside the platform so we can work directly.",
+        contentKind: "message",
+        neutralSubjectLabel: "Shared task",
+      }),
+    ).resolves.toMatchObject({
+      categories: ["off_platform_solicitation"],
+      flagged: true,
+      provider: "deterministic-fake",
+      riskLevel: "medium",
+    });
+  });
 });
 
 describe("OpenAiProvider", () => {
+  it("uses private strict structured output for one bounded compliance item", async () => {
+    let submittedBody = "";
+    const provider = new OpenAiProvider({
+      apiKey: "synthetic-openai-key",
+      fetchImplementation: (_url, init) => {
+        submittedBody = typeof init?.body === "string" ? init.body : "";
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              output_text: JSON.stringify({
+                categories: ["off_platform_solicitation"],
+                flagged: true,
+                reason: "The message may request work outside approved channels.",
+                riskLevel: "medium",
+              }),
+            }),
+            { status: 200 },
+          ),
+        );
+      },
+      model: "synthetic-model",
+    });
+    const privateContent = "x".repeat(21_000);
+
+    await expect(
+      provider.assessCompliance({
+        content: privateContent,
+        contentKind: "message",
+        neutralSubjectLabel: "Shared task",
+      }),
+    ).resolves.toMatchObject({ flagged: true, provider: "openai", riskLevel: "medium" });
+
+    const body = JSON.parse(submittedBody) as {
+      input: { content: string; role: string }[];
+      store: boolean;
+      text: {
+        format: {
+          schema: { additionalProperties: boolean; required: string[] };
+          strict: boolean;
+          type: string;
+        };
+      };
+    };
+    expect(body.store).toBe(false);
+    expect(body.input).toHaveLength(2);
+    expect(body.input[1]?.role).toBe("user");
+    const item = JSON.parse(body.input[1]?.content ?? "{}") as { content?: string };
+    expect(item.content).toHaveLength(20_000);
+    expect(body.text.format).toMatchObject({
+      schema: {
+        additionalProperties: false,
+        required: ["categories", "flagged", "reason", "riskLevel"],
+      },
+      strict: true,
+      type: "json_schema",
+    });
+  });
+
   it("normalizes structured prioritization and fills missing assessments", async () => {
     const provider = new OpenAiProvider({
       apiKey: "synthetic-openai-key",

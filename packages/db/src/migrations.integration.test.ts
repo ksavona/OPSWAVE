@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDatabase } from "./client.ts";
 import { runMigrations } from "./migrate.ts";
 import { systemMetadata } from "./schema.ts";
+import { CollaborationStore } from "./collaboration-store.ts";
 import { OpsWeaveStore, StoreConflictError, type SessionTimes } from "./store.ts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -29,6 +30,7 @@ describe("database migrations and repositories", () => {
   const pool = new Pool({ connectionString: isolatedDatabaseUrl, max: 4 });
   const database = createDatabase(pool);
   const store = new OpsWeaveStore(pool);
+  const collaboration = new CollaborationStore(pool);
 
   beforeAll(async () => {
     await pool.query("DROP SCHEMA IF EXISTS opsweave CASCADE");
@@ -45,6 +47,16 @@ describe("database migrations and repositories", () => {
     expect(tables.rows.map((row) => row.table_name)).toEqual(
       expect.arrayContaining([
         "attachments",
+        "access_grants",
+        "activity_payloads",
+        "compliance_flags",
+        "compliance_jobs",
+        "delegate_kanban_stages",
+        "delegate_task_states",
+        "delegation_aliases",
+        "invitation_tokens",
+        "notification_outbox",
+        "notifications",
         "owners",
         "owner_credentials",
         "sessions",
@@ -60,6 +72,10 @@ describe("database migrations and repositories", () => {
         "task_checklist_items",
         "task_intake_origins",
         "task_time_entries",
+        "task_assignments",
+        "users",
+        "user_credentials",
+        "workspace_memberships",
         "audit_events",
         "trash_records",
       ]),
@@ -82,12 +98,948 @@ describe("database migrations and repositories", () => {
     });
     expect(owner.passwordHash).not.toContain("password");
     expect((await store.getWorkspaceConfiguration(owner.workspaceId)).workingDays).toHaveLength(7);
+    const user = await store.findUserForLogin("synthetic-owner");
+    expect(user).toMatchObject({
+      membershipStatus: "active",
+      ownerId: owner.ownerId,
+      role: "owner",
+      userStatus: "active",
+    });
     await expect(
       store.bootstrapOwner({
         normalizedUsername: "second-owner",
         passwordHash: "synthetic-hash",
         username: "Second-Owner",
         workspaceDisplayName: "Second workspace",
+      }),
+    ).rejects.toBeInstanceOf(StoreConflictError);
+  });
+
+  it("activates scoped access, creates private delegate state, and revokes immediately", async () => {
+    const owner = await store.findUserForLogin("synthetic-owner");
+    if (!owner?.ownerId) throw new Error("Expected unified owner.");
+    const task = await store.createTask(owner.workspaceId, owner.ownerId, {
+      allocatedHours: 2,
+      title: "Scoped collaboration fixture",
+      workflowLane: "inbox",
+    });
+    const token = "synthetic-invitation-token-that-is-long-enough";
+    const digest = createHash("sha256").update(token).digest("hex");
+    const created = await collaboration.createAccessGrant({
+      accessRole: "contributor",
+      actorUserId: owner.userId,
+      delegateEmail: "delegate@example.test",
+      delegationNote: "Complete the isolated fixture.",
+      encryptedInvitationPayload: null,
+      expiresAt: new Date("2026-09-01T00:00:00.000Z"),
+      invitationExpiresAt: new Date("2026-08-20T00:00:00.000Z"),
+      invitationTokenDigest: digest,
+      subjectId: task.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    expect(created.grant.status).toBe("invite_pending");
+    expect(
+      await collaboration.inspectInvitation(digest, new Date("2026-08-18T00:00:00.000Z")),
+    ).not.toBeNull();
+    const accepted = await collaboration.acceptInvitation({
+      fullName: "Synthetic Delegate",
+      passwordHash: "$argon2id$synthetic-delegate-hash",
+      tokenDigest: digest,
+    });
+    const delegate = await store.findUserForLogin("delegate@example.test");
+    if (delegate === null) throw new Error("Expected activated delegate.");
+    expect(accepted.userId).toBe(delegate.userId);
+    const delegateWorkspace = await collaboration.listDelegateWorkspace(
+      owner.workspaceId,
+      delegate.membershipId,
+      delegate.userId,
+    );
+    expect(delegateWorkspace.tasks.map((candidate) => candidate.id)).toContain(task.id);
+    const ready = delegateWorkspace.stages.find(
+      (stage) => stage.semanticKind === "ready_for_review",
+    );
+    const delegateTask = delegateWorkspace.tasks.find((candidate) => candidate.id === task.id);
+    if (ready === undefined || delegateTask === undefined)
+      throw new Error("Expected delegate state.");
+    await collaboration.updateDelegateTaskState({
+      latestUpdate: "Ready for owner validation.",
+      membershipId: delegate.membershipId,
+      stageId: ready.id,
+      taskId: task.id,
+      userId: delegate.userId,
+      version: delegateTask.stateVersion,
+      workspaceId: owner.workspaceId,
+    });
+    expect(
+      (await store.listTasks(owner.workspaceId, "manual")).find(
+        (candidate) => candidate.id === task.id,
+      ),
+    ).toMatchObject({ delegateReviewPending: true });
+    expect((await collaboration.listNotifications(owner.userId))[0]?.type).toBe("ready_for_review");
+    expect(await collaboration.listTaskDelegationProgress(owner.workspaceId, task.id)).toEqual([
+      expect.objectContaining({
+        accessStatus: "active",
+        delegateUserId: delegate.userId,
+        latestUpdate: "Ready for owner validation.",
+        stageName: ready.name,
+      }),
+    ]);
+    const sessionTimes: SessionTimes = {
+      absoluteExpiresAt: new Date("2026-08-25T00:00:00.000Z"),
+      createdAt: new Date("2026-08-18T00:00:00.000Z"),
+      idleExpiresAt: new Date("2026-08-19T00:00:00.000Z"),
+      lastSeenAt: new Date("2026-08-18T00:00:00.000Z"),
+      recentAuthenticatedAt: new Date("2026-08-18T00:00:00.000Z"),
+      revokedAt: null,
+    };
+    const delegateSession = await store.createPrincipalSession(
+      delegate,
+      "b".repeat(64),
+      sessionTimes,
+    );
+    await collaboration.revokeAccessGrant(owner.workspaceId, owner.userId, created.grant.id);
+    expect(
+      (await store.findPrincipalSessionByDigest(delegateSession.tokenDigest))?.revokedAt,
+    ).toBeInstanceOf(Date);
+    expect(
+      await collaboration.resolveAccess(owner.workspaceId, delegate.userId, "task", task.id),
+    ).toBeNull();
+  });
+
+  it("changes a delegate by preserving the revoked grant and issuing a new invitation", async () => {
+    const owner = await store.findUserForLogin("synthetic-owner");
+    if (!owner?.ownerId) throw new Error("Expected unified owner.");
+    const task = await store.createTask(owner.workspaceId, owner.ownerId, {
+      title: "Delegate replacement fixture",
+      workflowLane: "inbox",
+    });
+    const originalDigest = createHash("sha256")
+      .update("original-delegate-replacement-token")
+      .digest("hex");
+    const original = await collaboration.createAccessGrant({
+      accessRole: "contributor",
+      actorUserId: owner.userId,
+      delegateEmail: "original-replacement@example.test",
+      delegationNote: "Preserve this instruction on replacement.",
+      encryptedInvitationPayload: null,
+      expiresAt: new Date("2030-09-01T00:00:00.000Z"),
+      invitationExpiresAt: new Date("2030-08-20T00:00:00.000Z"),
+      invitationTokenDigest: originalDigest,
+      subjectId: task.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    const replacementDigest = createHash("sha256")
+      .update("new-delegate-replacement-token")
+      .digest("hex");
+    const replacement = await collaboration.replaceAccessGrant({
+      actorUserId: owner.userId,
+      delegateEmail: "new-replacement@example.test",
+      encryptedInvitationPayload: null,
+      grantId: original.grant.id,
+      invitationExpiresAt: new Date("2030-08-20T00:00:00.000Z"),
+      invitationTokenDigest: replacementDigest,
+      version: original.grant.version,
+      workspaceId: owner.workspaceId,
+    });
+    const grants = await collaboration.listAccessGrants(owner.workspaceId, {
+      id: task.id,
+      type: "task",
+    });
+    expect(grants.find((grant) => grant.id === original.grant.id)?.status).toBe("revoked");
+    expect(replacement.grant).toMatchObject({
+      delegateEmail: "new-replacement@example.test",
+      delegationNote: "Preserve this instruction on replacement.",
+      status: "invite_pending",
+    });
+    expect(await collaboration.inspectInvitation(originalDigest)).toBeNull();
+    expect(await collaboration.inspectInvitation(replacementDigest)).not.toBeNull();
+  });
+
+  it("materialises idempotent overdue, waiting, and access-expiry owner alerts", async () => {
+    const owner = await store.findUserForLogin("synthetic-owner");
+    if (!owner?.ownerId) throw new Error("Expected unified owner.");
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString().slice(0, 10);
+    const task = await store.createTask(owner.workspaceId, owner.ownerId, {
+      dueDate: yesterday,
+      title: "Delegation alert fixture",
+    });
+    const digest = createHash("sha256").update("delegation-alert-token").digest("hex");
+    await collaboration.createAccessGrant({
+      accessRole: "contributor",
+      actorUserId: owner.userId,
+      delegateEmail: "alert-delegate@example.test",
+      delegationNote: null,
+      encryptedInvitationPayload: null,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1_000),
+      invitationExpiresAt: new Date(Date.now() + 12 * 60 * 60 * 1_000),
+      invitationTokenDigest: digest,
+      subjectId: task.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    const accepted = await collaboration.acceptInvitation({
+      fullName: "Alert Delegate",
+      passwordHash: "$argon2id$synthetic-alert-hash",
+      tokenDigest: digest,
+    });
+    const delegate = await store.findUserForLogin("alert-delegate@example.test");
+    if (delegate === null) throw new Error("Expected alert delegate.");
+    const workspace = await collaboration.listDelegateWorkspace(
+      owner.workspaceId,
+      delegate.membershipId,
+      accepted.userId,
+    );
+    const delegatedTask = workspace.tasks.find((candidate) => candidate.id === task.id);
+    const waiting = workspace.stages.find((stage) => stage.semanticKind === "waiting_for_input");
+    if (delegatedTask === undefined || waiting === undefined)
+      throw new Error("Expected waiting state.");
+    await collaboration.updateDelegateTaskState({
+      latestUpdate: "Waiting for an owner decision.",
+      membershipId: delegate.membershipId,
+      stageId: waiting.id,
+      taskId: task.id,
+      userId: accepted.userId,
+      version: delegatedTask.stateVersion,
+      workspaceId: owner.workspaceId,
+    });
+    await pool.query(
+      `UPDATE opsweave.delegate_task_states SET last_activity_at=now()-interval '25 hours'
+       WHERE task_id=$1 AND user_id=$2`,
+      [task.id, accepted.userId],
+    );
+    expect(await collaboration.materializeDelegationAlerts()).toBe(3);
+    expect(await collaboration.materializeDelegationAlerts()).toBe(0);
+    expect((await collaboration.listNotifications(owner.userId)).map((item) => item.type)).toEqual(
+      expect.arrayContaining(["access_expiring", "delegated_overdue", "delegated_waiting"]),
+    );
+  });
+
+  it("keeps an approved safe presentation current when anonymisation is already enabled", async () => {
+    const owner = await store.findUserForLogin("synthetic-owner");
+    if (!owner?.ownerId) throw new Error("Expected unified owner.");
+    const task = await store.createTask(owner.workspaceId, owner.ownerId, {
+      title: "Anonymisation idempotency fixture",
+    });
+    await collaboration.setSubjectAnonymisation({
+      actorUserId: owner.userId,
+      enabled: true,
+      subjectId: task.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    const draft = await collaboration.getDelegatePresentation(owner.workspaceId, "task", task.id);
+    if (draft === null) throw new Error("Expected a safe presentation draft.");
+    const approved = await collaboration.saveDelegatePresentation({
+      actorUserId: owner.userId,
+      neutralClientLabel: null,
+      neutralProjectLabel: null,
+      safeDefinitionOfDone: null,
+      safeDescription: "Safe description",
+      safeNotes: { content: [], type: "doc" },
+      safeTitle: "Shared task",
+      safeWorkDescription: null,
+      status: "approved",
+      subjectId: task.id,
+      subjectType: "task",
+      version: draft.version,
+      workspaceId: owner.workspaceId,
+    });
+    await collaboration.setSubjectAnonymisation({
+      actorUserId: owner.userId,
+      enabled: true,
+      subjectId: task.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    expect(
+      await collaboration.getDelegatePresentation(owner.workspaceId, "task", task.id),
+    ).toMatchObject({
+      sourceVersion: approved.sourceVersion,
+      status: "approved",
+      version: approved.version,
+    });
+    await collaboration.createTimeEntry({
+      accessGrantId: null,
+      actorAlias: null,
+      actorUserId: owner.userId,
+      description: "Safe accounting-only update",
+      entryDate: "2026-08-17",
+      hours: 0.25,
+      subjectId: task.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    expect(
+      await collaboration.getDelegatePresentation(owner.workspaceId, "task", task.id),
+    ).toMatchObject({ status: "approved" });
+    const current = (await store.listTasks(owner.workspaceId, "manual")).find(
+      (candidate) => candidate.id === task.id,
+    );
+    if (current === undefined) throw new Error("Expected the anonymised task.");
+    await store.updateTask(owner.workspaceId, owner.ownerId, task.id, {
+      ...current,
+      title: "Changed private source title",
+    });
+    expect(
+      await collaboration.getDelegatePresentation(owner.workspaceId, "task", task.id),
+    ).toMatchObject({ status: "stale" });
+  });
+
+  it("enforces invitation, document, notification, identity, and audit boundaries", async () => {
+    const owner = await store.findUserForLogin("synthetic-owner");
+    if (!owner?.ownerId) throw new Error("Expected unified owner.");
+    const task = await store.createTask(owner.workspaceId, owner.ownerId, {
+      allocatedHours: 4,
+      title: "External boundary fixture",
+      workflowLane: "inbox",
+    });
+    const expiredDigest = createHash("sha256").update("expired-boundary-token").digest("hex");
+    const expiredTask = await store.createTask(owner.workspaceId, owner.ownerId, {
+      title: "Expired invitation fixture",
+    });
+    await collaboration.createAccessGrant({
+      accessRole: "reviewer",
+      actorUserId: owner.userId,
+      delegateEmail: "expired-boundary@example.test",
+      delegationNote: null,
+      encryptedInvitationPayload: null,
+      expiresAt: null,
+      invitationExpiresAt: new Date(0),
+      invitationTokenDigest: expiredDigest,
+      subjectId: expiredTask.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    expect(await collaboration.inspectInvitation(expiredDigest)).toBeNull();
+
+    const primaryDigest = createHash("sha256").update("primary-boundary-token").digest("hex");
+    const primaryGrant = await collaboration.createAccessGrant({
+      accessRole: "contributor",
+      actorUserId: owner.userId,
+      delegateEmail: "primary-boundary@example.test",
+      delegationNote: "Use only the approved collaboration surface.",
+      encryptedInvitationPayload: null,
+      expiresAt: new Date("2030-09-01T00:00:00.000Z"),
+      invitationExpiresAt: new Date("2030-08-20T00:00:00.000Z"),
+      invitationTokenDigest: primaryDigest,
+      subjectId: task.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    const primaryAccepted = await collaboration.acceptInvitation({
+      fullName: "Primary Boundary Delegate",
+      passwordHash: "$argon2id$synthetic-primary-boundary-hash",
+      tokenDigest: primaryDigest,
+    });
+    const secondaryDigest = createHash("sha256").update("secondary-boundary-token").digest("hex");
+    await collaboration.createAccessGrant({
+      accessRole: "reviewer",
+      actorUserId: owner.userId,
+      delegateEmail: "secondary-boundary@example.test",
+      delegationNote: null,
+      encryptedInvitationPayload: null,
+      expiresAt: new Date("2030-09-01T00:00:00.000Z"),
+      invitationExpiresAt: new Date("2030-08-20T00:00:00.000Z"),
+      invitationTokenDigest: secondaryDigest,
+      subjectId: task.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    const secondaryAccepted = await collaboration.acceptInvitation({
+      fullName: "Secondary Boundary Delegate",
+      passwordHash: "$argon2id$synthetic-secondary-boundary-hash",
+      tokenDigest: secondaryDigest,
+    });
+    const primary = await store.findUserForLogin("primary-boundary@example.test");
+    if (primary === null) throw new Error("Expected primary boundary delegate.");
+    const participants = await collaboration.listSubjectParticipants(
+      owner.workspaceId,
+      "delegate",
+      "task",
+      task.id,
+      primaryAccepted.userId,
+    );
+    const secondaryParticipant = participants.find(
+      (participant) => participant.userId === secondaryAccepted.userId,
+    );
+    expect(secondaryParticipant?.displayName).toMatch(/^Participant [0-9A-F]{6}$/u);
+    expect(secondaryParticipant?.displayName).not.toContain("Secondary Boundary Delegate");
+    expect(secondaryParticipant?.displayName).not.toContain("secondary-boundary@example.test");
+
+    const createAttachment = (input: {
+      name: string;
+      selectedUserIds?: readonly string[];
+      visibility: "internal_only" | "shared_all_delegates" | "shared_selected_delegates";
+    }) =>
+      collaboration.createCollaborationAttachment({
+        actorAlias: null,
+        actorUserId: owner.userId,
+        approvalStatus: "approved",
+        byteSize: 10,
+        contentHash: createHash("sha256").update(input.name).digest("hex"),
+        contentType: "text/plain",
+        delegateSafeName: null,
+        filenameRisk: false,
+        originalAttachmentId: null,
+        originalName: input.name,
+        selectedUserIds: input.selectedUserIds ?? [],
+        storageKey: randomUUID(),
+        subjectId: task.id,
+        subjectType: "task",
+        visibility: input.visibility,
+        workspaceId: owner.workspaceId,
+      });
+    await Promise.all([
+      createAttachment({ name: "internal.txt", visibility: "internal_only" }),
+      createAttachment({ name: "everyone.txt", visibility: "shared_all_delegates" }),
+      createAttachment({
+        name: "primary-only.txt",
+        selectedUserIds: [primaryAccepted.userId],
+        visibility: "shared_selected_delegates",
+      }),
+      createAttachment({
+        name: "owner-only-selection.txt",
+        selectedUserIds: [owner.userId],
+        visibility: "shared_selected_delegates",
+      }),
+    ]);
+    const ownerDocuments = await collaboration.listAccessibleAttachments({
+      subjectId: task.id,
+      subjectType: "task",
+      userId: owner.userId,
+      viewerRole: "owner",
+      workspaceId: owner.workspaceId,
+    });
+    expect(ownerDocuments).toHaveLength(4);
+    const primaryDocuments = await collaboration.listAccessibleAttachments({
+      subjectId: task.id,
+      subjectType: "task",
+      userId: primaryAccepted.userId,
+      viewerRole: "delegate",
+      workspaceId: owner.workspaceId,
+    });
+    expect(primaryDocuments.map((document) => document.displayName).sort()).toEqual([
+      "everyone.txt",
+      "primary-only.txt",
+    ]);
+
+    const activityId = await collaboration.createActivity({
+      actorAlias: null,
+      actorUserId: primaryAccepted.userId,
+      body: "This retained activity is visible only to authorised participants.",
+      contentStatus: "approved",
+      kind: "message",
+      mentionedUserIds: [owner.userId],
+      notificationUserIds: [owner.userId],
+      quarantineReason: null,
+      subjectId: task.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    expect(await collaboration.listNotifications(primaryAccepted.userId)).toEqual([]);
+    expect(await collaboration.listNotifications(owner.userId)).toContainEqual(
+      expect.objectContaining({ routeId: task.id, type: "mention_or_message" }),
+    );
+    await collaboration.createTimeEntry({
+      accessGrantId: primaryGrant.grant.id,
+      actorAlias: null,
+      actorUserId: primaryAccepted.userId,
+      description: "Retained delivery history",
+      entryDate: "2026-08-17",
+      hours: 1,
+      subjectId: task.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    const ownerCredentialBefore = await store.getOnlyOwnerCredential();
+    const primaryCredential = await store.getUserCredentialById(
+      owner.workspaceId,
+      primaryAccepted.userId,
+    );
+    if (primaryCredential === null) throw new Error("Expected primary delegate credentials.");
+    const rotated = await store.changeUserPassword({
+      newPasswordHash: "$argon2id$synthetic-primary-rotated-hash",
+      times: {
+        absoluteExpiresAt: new Date("2026-08-25T00:00:00.000Z"),
+        createdAt: new Date("2026-08-18T00:00:00.000Z"),
+        idleExpiresAt: new Date("2026-08-19T00:00:00.000Z"),
+        lastSeenAt: new Date("2026-08-18T00:00:00.000Z"),
+        recentAuthenticatedAt: new Date("2026-08-18T00:00:00.000Z"),
+        revokedAt: null,
+      },
+      tokenDigest: createHash("sha256").update("primary-rotated-session").digest("hex"),
+      user: primaryCredential,
+    });
+    expect(rotated.userId).toBe(primaryAccepted.userId);
+    expect(
+      (await store.getUserCredentialById(owner.workspaceId, primaryAccepted.userId))?.passwordHash,
+    ).toBe("$argon2id$synthetic-primary-rotated-hash");
+    expect((await store.getOnlyOwnerCredential())?.passwordHash).toBe(
+      ownerCredentialBefore?.passwordHash,
+    );
+    await collaboration.revokeAccessGrant(owner.workspaceId, owner.userId, primaryGrant.grant.id);
+    expect(
+      await collaboration.resolveAccess(owner.workspaceId, primaryAccepted.userId, "task", task.id),
+    ).toBeNull();
+    expect(
+      await collaboration.resolveAccess(
+        owner.workspaceId,
+        secondaryAccepted.userId,
+        "task",
+        task.id,
+      ),
+    ).not.toBeNull();
+    expect(
+      await collaboration.listTimeEntries({
+        subjectId: task.id,
+        subjectType: "task",
+        viewerRole: "owner",
+        workspaceId: owner.workspaceId,
+      }),
+    ).toContainEqual(
+      expect.objectContaining({ description: "Retained delivery history", userId: primary.userId }),
+    );
+    expect(
+      await collaboration.listActivity({
+        subjectId: task.id,
+        subjectType: "task",
+        viewerRole: "owner",
+        viewerUserId: owner.userId,
+        workspaceId: owner.workspaceId,
+      }),
+    ).toContainEqual(expect.objectContaining({ id: activityId }));
+  });
+
+  it("keeps aliases stable within an anonymised project and unlinkable across projects", async () => {
+    const owner = await store.findUserForLogin("synthetic-owner");
+    if (!owner?.ownerId) throw new Error("Expected unified owner.");
+    const firstProject = await store.createProject(owner.workspaceId, owner.ownerId, {
+      name: "Private client one",
+    });
+    const secondProject = await store.createProject(owner.workspaceId, owner.ownerId, {
+      name: "Private client two",
+    });
+    const firstTasks = await Promise.all([
+      store.createTask(owner.workspaceId, owner.ownerId, {
+        projectId: firstProject.id,
+        title: "First private task",
+      }),
+      store.createTask(owner.workspaceId, owner.ownerId, {
+        projectId: firstProject.id,
+        title: "Second private task",
+      }),
+    ]);
+    const secondTask = await store.createTask(owner.workspaceId, owner.ownerId, {
+      projectId: secondProject.id,
+      title: "Other private task",
+    });
+    const firstDigest = createHash("sha256").update("first-alias-project-token").digest("hex");
+    await collaboration.createAccessGrant({
+      accessRole: "project_collaborator",
+      actorUserId: owner.userId,
+      anonymise: true,
+      delegateEmail: "alias-boundary@example.test",
+      delegationNote: null,
+      encryptedInvitationPayload: null,
+      expiresAt: null,
+      invitationExpiresAt: new Date("2030-08-20T00:00:00.000Z"),
+      invitationTokenDigest: firstDigest,
+      subjectId: firstProject.id,
+      subjectType: "project",
+      workspaceId: owner.workspaceId,
+    });
+    const firstAccepted = await collaboration.acceptInvitation({
+      fullName: "Alias Boundary Delegate",
+      passwordHash: "$argon2id$synthetic-alias-boundary-hash",
+      tokenDigest: firstDigest,
+    });
+    await collaboration.ensureAliasesForUser(
+      owner.workspaceId,
+      firstAccepted.userId,
+      () => `Synthetic Alias ${randomUUID()}`,
+    );
+    for (const task of firstTasks) {
+      await collaboration.updateTaskDelegateSharing({
+        actorUserId: owner.userId,
+        selectedUserIds: [],
+        taskId: task.id,
+        visibility: "project_delegates",
+        workspaceId: owner.workspaceId,
+      });
+    }
+    const secondDigest = createHash("sha256").update("second-alias-project-token").digest("hex");
+    await collaboration.createAccessGrant({
+      accessRole: "project_collaborator",
+      actorUserId: owner.userId,
+      anonymise: true,
+      delegateEmail: "alias-boundary@example.test",
+      delegationNote: null,
+      encryptedInvitationPayload: null,
+      expiresAt: null,
+      invitationExpiresAt: new Date("2030-08-20T00:00:00.000Z"),
+      invitationTokenDigest: secondDigest,
+      subjectId: secondProject.id,
+      subjectType: "project",
+      workspaceId: owner.workspaceId,
+    });
+    await collaboration.acceptInvitation({
+      tokenDigest: secondDigest,
+      userId: firstAccepted.userId,
+    });
+    await collaboration.ensureAliasesForUser(
+      owner.workspaceId,
+      firstAccepted.userId,
+      () => `Synthetic Alias ${randomUUID()}`,
+    );
+    await collaboration.updateTaskDelegateSharing({
+      actorUserId: owner.userId,
+      selectedUserIds: [],
+      taskId: secondTask.id,
+      visibility: "project_delegates",
+      workspaceId: owner.workspaceId,
+    });
+    const firstProjectAccess = await collaboration.resolveAccess(
+      owner.workspaceId,
+      firstAccepted.userId,
+      "project",
+      firstProject.id,
+    );
+    const secondProjectAccess = await collaboration.resolveAccess(
+      owner.workspaceId,
+      firstAccepted.userId,
+      "project",
+      secondProject.id,
+    );
+    expect(firstProjectAccess?.alias).toBeTruthy();
+    expect(secondProjectAccess?.alias).toBeTruthy();
+    expect(secondProjectAccess?.alias).not.toBe(firstProjectAccess?.alias);
+    for (const task of firstTasks) {
+      expect(
+        await collaboration.resolveAccess(owner.workspaceId, firstAccepted.userId, "task", task.id),
+      ).toMatchObject({ alias: firstProjectAccess?.alias, inherited: true });
+    }
+    expect(
+      await collaboration.resolveAccess(
+        owner.workspaceId,
+        firstAccepted.userId,
+        "task",
+        secondTask.id,
+      ),
+    ).toMatchObject({ alias: secondProjectAccess?.alias, inherited: true });
+  });
+
+  it("keeps chatter and timesheets scoped to authorised principals and immutable audit", async () => {
+    const owner = await store.findUserForLogin("synthetic-owner");
+    if (!owner?.ownerId) throw new Error("Expected unified owner.");
+    const task = await store.createTask(owner.workspaceId, owner.ownerId, {
+      allocatedHours: 3,
+      title: "Collaborative activity fixture",
+      workflowLane: "inbox",
+    });
+    const digest = createHash("sha256").update("second-synthetic-invitation-token").digest("hex");
+    await collaboration.createAccessGrant({
+      accessRole: "contributor",
+      actorUserId: owner.userId,
+      delegateEmail: "activity-delegate@example.test",
+      delegationNote: null,
+      encryptedInvitationPayload: null,
+      expiresAt: new Date("2030-09-01T00:00:00.000Z"),
+      invitationExpiresAt: new Date("2030-08-20T00:00:00.000Z"),
+      invitationTokenDigest: digest,
+      subjectId: task.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    const accepted = await collaboration.acceptInvitation({
+      fullName: "Activity Delegate",
+      passwordHash: "$argon2id$synthetic-activity-hash",
+      tokenDigest: digest,
+    });
+    const participants = await collaboration.listSubjectParticipants(
+      owner.workspaceId,
+      "delegate",
+      "task",
+      task.id,
+      accepted.userId,
+    );
+    expect(participants.map((participant) => participant.userId)).toEqual(
+      expect.arrayContaining([owner.userId, accepted.userId]),
+    );
+    expect(
+      participants.find((participant) => participant.userId === accepted.userId),
+    ).toMatchObject({
+      displayName: "You",
+    });
+    expect(participants.find((participant) => participant.userId === owner.userId)).toMatchObject({
+      displayName: "Workspace owner",
+    });
+    const eventId = await collaboration.createActivity({
+      actorAlias: null,
+      actorUserId: accepted.userId,
+      body: "The scoped implementation is ready for review.",
+      contentStatus: "approved",
+      kind: "message",
+      mentionedUserIds: [owner.userId],
+      notificationUserIds: [owner.userId],
+      quarantineReason: null,
+      subjectId: task.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    expect(
+      await collaboration.listActivity({
+        subjectId: task.id,
+        subjectType: "task",
+        viewerRole: "delegate",
+        viewerUserId: accepted.userId,
+        workspaceId: owner.workspaceId,
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        body: "The scoped implementation is ready for review.",
+        id: eventId,
+      }),
+    );
+    await collaboration.createTimeEntry({
+      accessGrantId:
+        (await collaboration.resolveAccess(owner.workspaceId, accepted.userId, "task", task.id))
+          ?.grantId ?? null,
+      actorAlias: null,
+      actorUserId: accepted.userId,
+      description: "Implemented the scoped collaboration fixture.",
+      entryDate: "2030-08-18",
+      hours: 1.25,
+      subjectId: task.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    const entries = await collaboration.listTimeEntries({
+      subjectId: task.id,
+      subjectType: "task",
+      viewerRole: "owner",
+      workspaceId: owner.workspaceId,
+    });
+    expect(entries).toContainEqual(
+      expect.objectContaining({ hours: 1.25, userId: accepted.userId }),
+    );
+    const entry = entries.find((candidate) => candidate.userId === accepted.userId);
+    if (entry === undefined) throw new Error("Expected delegate time entry.");
+    await collaboration.updateTimeEntry({
+      actorUserId: accepted.userId,
+      canManageAll: false,
+      description: "Implemented and verified the fixture.",
+      entryDate: entry.entryDate,
+      entryId: entry.id,
+      hours: 1.5,
+      subjectId: task.id,
+      subjectType: "task",
+      version: entry.version,
+      workspaceId: owner.workspaceId,
+    });
+    expect(
+      (await store.listTasks(owner.workspaceId, "manual")).find(
+        (candidate) => candidate.id === task.id,
+      ),
+    ).toMatchObject({ hoursSpent: 1.5 });
+    await collaboration.deleteTimeEntry({
+      actorUserId: accepted.userId,
+      canManageAll: false,
+      entryId: entry.id,
+      subjectId: task.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    expect(
+      (await store.listTasks(owner.workspaceId, "manual")).find(
+        (candidate) => candidate.id === task.id,
+      ),
+    ).toMatchObject({ hoursSpent: 0 });
+  });
+
+  it("enforces project task audiences and lets only project collaborators create scoped tasks", async () => {
+    const owner = await store.findUserForLogin("synthetic-owner");
+    if (!owner?.ownerId) throw new Error("Expected unified owner.");
+    const project = await store.createProject(owner.workspaceId, owner.ownerId, {
+      name: "Project collaboration fixture",
+    });
+    const internalTask = await store.createTask(owner.workspaceId, owner.ownerId, {
+      projectId: project.id,
+      title: "Initially internal project task",
+    });
+    const digest = createHash("sha256")
+      .update("project-collaborator-invitation-token")
+      .digest("hex");
+    await collaboration.createAccessGrant({
+      accessRole: "project_collaborator",
+      actorUserId: owner.userId,
+      delegateEmail: "project-collaborator@example.test",
+      delegationNote: "Create only work needed for this project.",
+      encryptedInvitationPayload: null,
+      expiresAt: new Date("2030-09-01T00:00:00.000Z"),
+      invitationExpiresAt: new Date("2030-08-20T00:00:00.000Z"),
+      invitationTokenDigest: digest,
+      subjectId: project.id,
+      subjectType: "project",
+      workspaceId: owner.workspaceId,
+    });
+    const accepted = await collaboration.acceptInvitation({
+      fullName: "Project Collaborator",
+      passwordHash: "$argon2id$synthetic-project-collaborator-hash",
+      tokenDigest: digest,
+    });
+    const collaborator = await store.findUserForLogin("project-collaborator@example.test");
+    if (collaborator === null) throw new Error("Expected project collaborator.");
+    expect(
+      await collaboration.resolveAccess(
+        owner.workspaceId,
+        accepted.userId,
+        "task",
+        internalTask.id,
+      ),
+    ).toBeNull();
+    await collaboration.updateTaskDelegateSharing({
+      actorUserId: owner.userId,
+      selectedUserIds: [],
+      taskId: internalTask.id,
+      visibility: "project_delegates",
+      workspaceId: owner.workspaceId,
+    });
+    expect(
+      await collaboration.resolveAccess(
+        owner.workspaceId,
+        accepted.userId,
+        "task",
+        internalTask.id,
+      ),
+    ).toMatchObject({ accessRole: "project_collaborator", inherited: true });
+    await collaboration.updateTaskDelegateSharing({
+      actorUserId: owner.userId,
+      selectedUserIds: [accepted.userId],
+      taskId: internalTask.id,
+      visibility: "selected_delegates",
+      workspaceId: owner.workspaceId,
+    });
+    expect(await collaboration.getTaskDelegateSharing(owner.workspaceId, internalTask.id)).toEqual({
+      selectedUserIds: [accepted.userId],
+      visibility: "selected_delegates",
+    });
+    const createdTaskId = await collaboration.createDelegateProjectTask({
+      allocatedHours: 1.5,
+      actorUserId: accepted.userId,
+      definitionOfDone: "The synthetic outcome is independently verifiable.",
+      description: "A delegate-created task with an explicit safe scope.",
+      membershipId: collaborator.membershipId,
+      projectId: project.id,
+      title: "Delegate-created project task",
+      workspaceId: owner.workspaceId,
+    });
+    const delegateSubtaskId = await collaboration.createDelegateSubtask({
+      actorAlias: null,
+      actorUserId: accepted.userId,
+      description: "Only the creator may edit this item.",
+      label: "Delegate-owned subtask",
+      predictedHours: 0.5,
+      taskId: createdTaskId,
+      workspaceId: owner.workspaceId,
+    });
+    const delegateSubtask = (
+      await collaboration.listDelegateSubtasks(createdTaskId, accepted.userId)
+    ).find((subtask) => subtask.id === delegateSubtaskId);
+    if (delegateSubtask === undefined) throw new Error("Expected delegate-owned subtask.");
+    expect(delegateSubtask).toMatchObject({ canEdit: true, predictedHours: 0.5 });
+    await collaboration.updateDelegateSubtask({
+      actorAlias: null,
+      actorUserId: accepted.userId,
+      completed: true,
+      description: delegateSubtask.description,
+      label: delegateSubtask.label,
+      predictedHours: delegateSubtask.predictedHours,
+      subtaskId: delegateSubtask.id,
+      taskId: createdTaskId,
+      version: delegateSubtask.version,
+      workspaceId: owner.workspaceId,
+    });
+    expect(
+      (await collaboration.listDelegateSubtasks(createdTaskId, accepted.userId))[0],
+    ).toMatchObject({ completed: true });
+    expect(
+      await collaboration.resolveAccess(owner.workspaceId, accepted.userId, "task", createdTaskId),
+    ).toMatchObject({ accessRole: "project_collaborator", inherited: true });
+    expect(
+      (
+        await collaboration.listDelegateWorkspace(
+          owner.workspaceId,
+          collaborator.membershipId,
+          accepted.userId,
+        )
+      ).tasks,
+    ).toContainEqual(expect.objectContaining({ id: createdTaskId }));
+    await collaboration.updateCollaborationFlags(owner.workspaceId, owner.userId, {
+      complianceMonitorEnabled: true,
+      delegateUploadsEnabled: false,
+      invitationEmailEnabled: false,
+      multiUserEnabled: true,
+    });
+    await collaboration.createActivity({
+      actorAlias: null,
+      actorUserId: accepted.userId,
+      body: "A synthetic message that requires private model triage.",
+      contentStatus: "approved",
+      kind: "message",
+      mentionedUserIds: [],
+      notificationUserIds: [],
+      quarantineReason: null,
+      subjectId: createdTaskId,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    const complianceJob = await collaboration.claimComplianceJob();
+    if (complianceJob === null) throw new Error("Expected a compliance job.");
+    await collaboration.completeComplianceJob({
+      categories: ["off_platform_solicitation"],
+      flagged: true,
+      job: complianceJob,
+      model: "synthetic-model",
+      provider: "deterministic-fake",
+      reason: "Synthetic owner review fixture.",
+      riskLevel: "medium",
+    });
+    const complianceFlag = (await collaboration.listComplianceFlags(owner.workspaceId)).find(
+      (flag) => flag.subjectId === createdTaskId && flag.status === "open",
+    );
+    if (complianceFlag === undefined) throw new Error("Expected a private compliance flag.");
+    await collaboration.reviewComplianceFlag({
+      action: "restrict",
+      actorUserId: owner.userId,
+      flagId: complianceFlag.id,
+      workspaceId: owner.workspaceId,
+    });
+    expect(
+      await collaboration.resolveAccess(owner.workspaceId, accepted.userId, "task", createdTaskId),
+    ).toMatchObject({ accessRole: "reviewer" });
+    const restrictedWorkspace = await collaboration.listDelegateWorkspace(
+      owner.workspaceId,
+      collaborator.membershipId,
+      accepted.userId,
+    );
+    const restrictedTask = restrictedWorkspace.tasks.find((task) => task.id === createdTaskId);
+    const readyStage = restrictedWorkspace.stages.find(
+      (stage) => stage.semanticKind === "ready_for_review",
+    );
+    if (restrictedTask === undefined || readyStage === undefined) {
+      throw new Error("Expected restricted delegate task state.");
+    }
+    await expect(
+      collaboration.updateDelegateTaskState({
+        latestUpdate: "A reviewer must not mark delivery ready.",
+        membershipId: collaborator.membershipId,
+        stageId: readyStage.id,
+        taskId: createdTaskId,
+        userId: accepted.userId,
+        version: restrictedTask.stateVersion,
+        workspaceId: owner.workspaceId,
       }),
     ).rejects.toBeInstanceOf(StoreConflictError);
   });

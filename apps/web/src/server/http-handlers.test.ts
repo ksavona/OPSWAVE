@@ -1,4 +1,4 @@
-import type { SessionRecord } from "@opsweave/db";
+import type { PrincipalSessionRecord } from "@opsweave/db";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthService } from "./auth-service";
@@ -17,13 +17,28 @@ import type { SettingsService } from "./settings-service";
 import type { IntakeService } from "./intake-service";
 import type { PlanningService } from "./planning-service";
 
-const session = {
+const session: PrincipalSessionRecord = {
+  absoluteExpiresAt: new Date("2026-08-11T12:00:00.000Z"),
+  authorizationVersion: 1,
   createdAt: new Date("2026-08-04T12:00:00.000Z"),
+  email: null,
+  fullName: "Synthetic Owner",
+  id: "00000000-0000-4000-8000-000000000003",
+  idleExpiresAt: new Date("2026-08-05T00:00:00.000Z"),
   lastSeenAt: new Date("2026-08-04T12:00:00.000Z"),
-  ownerId: "owner",
+  membershipAuthorizationVersion: 1,
+  membershipId: "00000000-0000-4000-8000-000000000004",
+  membershipStatus: "active",
+  ownerId: "00000000-0000-4000-8000-000000000001",
+  recentAuthenticatedAt: new Date("2026-08-04T12:00:00.000Z"),
+  revokedAt: null,
+  role: "owner",
+  tokenDigest: "synthetic-token-digest",
+  userId: "00000000-0000-4000-8000-000000000005",
+  userStatus: "active",
   username: "Synthetic-Owner",
-  workspaceId: "workspace",
-} as SessionRecord;
+  workspaceId: "00000000-0000-4000-8000-000000000002",
+};
 
 const request = (path: string, method: string, value?: unknown, cookie?: string) =>
   new Request(`http://localhost:3000${path}`, {
@@ -38,6 +53,11 @@ const request = (path: string, method: string, value?: unknown, cookie?: string)
 
 const configure = () => {
   const auth = {
+    authenticatePrincipalToken: vi.fn(async (token: string | null) => {
+      if (token !== "valid-token-long-enough-for-authentication")
+        throw new Error("not authenticated");
+      return session;
+    }),
     authenticateToken: vi.fn(async (token: string | null) => {
       if (token !== "valid-token-long-enough-for-authentication")
         throw new Error("not authenticated");
@@ -89,6 +109,7 @@ describe("HTTP authentication and settings contracts", () => {
       authenticated: true,
       createdAt: "2026-08-04T12:00:00.000Z",
       lastSeenAt: "2026-08-04T12:00:00.000Z",
+      role: "owner",
       username: "Synthetic-Owner",
     });
     const logoutResponse = await logoutHandler(request("/api/auth/logout", "POST", {}, token));

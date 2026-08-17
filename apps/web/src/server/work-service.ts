@@ -72,12 +72,14 @@ export class WorkService {
     const query = boardQuerySchema.parse({ sort: requestedSort });
     const configuration = await this.store.getWorkspaceConfiguration(session.workspaceId);
     const sort: KanbanSortMode = query.sort ?? configuration.general.defaultKanbanSort;
-    const [projects, stages, storedTasks, entityDependencies] = await Promise.all([
-      this.store.listProjects(session.workspaceId),
-      this.store.listProjectStages(session.workspaceId),
-      this.store.listTasks(session.workspaceId, sort),
-      this.store.listEntityDependencies(session.workspaceId),
-    ]);
+    const [projects, stages, storedTasks, entityDependencies, projectDirectTime] =
+      await Promise.all([
+        this.store.listProjects(session.workspaceId),
+        this.store.listProjectStages(session.workspaceId),
+        this.store.listTasks(session.workspaceId, sort),
+        this.store.listEntityDependencies(session.workspaceId),
+        this.store.listProjectDirectTimeTotals(session.workspaceId),
+      ]);
     const dependencies = entityDependencies.flatMap((dependency) =>
       dependency.dependentType === "task" && dependency.blockerType === "task"
         ? [{ dependsOnTaskId: dependency.blockerId, taskId: dependency.dependentId }]
@@ -116,10 +118,13 @@ export class WorkService {
         : [],
     );
     const projectMetrics = Object.fromEntries(
-      projects.map((project) => [
-        project.id,
-        deriveProjectMetrics(tasks.filter((task) => task.projectId === project.id)),
-      ]),
+      projects.map((project) => {
+        const metrics = deriveProjectMetrics(tasks.filter((task) => task.projectId === project.id));
+        return [
+          project.id,
+          { ...metrics, hoursSpent: metrics.hoursSpent + (projectDirectTime[project.id] ?? 0) },
+        ];
+      }),
     );
     const blockerCounts = Object.fromEntries(
       tasks.map((task) => [task.id, transitiveBlockerIds(task.id, dependencies).length]),

@@ -292,6 +292,7 @@ export const projectUpdateSchema = projectCreateSchema.extend({
 
 export const taskChecklistItemSchema = z.object({
   completed: z.boolean(),
+  delegateVisible: z.boolean().default(false),
   description: nullableText(5_000),
   id: z.uuid().optional(),
   label: z.string().trim().min(1).max(500),
@@ -303,6 +304,10 @@ export const taskTimeEntryCreateSchema = z.object({
   description: z.string().trim().min(1).max(5_000),
   entryDate: z.iso.date(),
   hours: z.number().positive().max(24),
+});
+
+export const timeEntryUpdateSchema = taskTimeEntryCreateSchema.extend({
+  version: z.number().int().positive(),
 });
 
 export const taskSplitSchema = z.object({

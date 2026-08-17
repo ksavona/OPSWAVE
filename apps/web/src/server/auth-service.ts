@@ -13,7 +13,13 @@ import {
   validateOwnerUsername,
   verifyPassword,
 } from "@opsweave/domain";
-import { StoreConflictError, type OpsWeaveStore, type SessionRecord } from "@opsweave/db";
+import {
+  StoreConflictError,
+  type OpsWeaveStore,
+  type PrincipalSessionRecord,
+  type SessionRecord,
+  type UserCredentialRecord,
+} from "@opsweave/db";
 
 import type { RateLimitGate } from "./rate-limits";
 import { digestRateLimitSignal, digestSessionToken } from "./request-security";
@@ -22,7 +28,7 @@ const INVALID_LOGIN_MESSAGE = "The username or password is invalid.";
 
 export interface CreatedSession {
   readonly maxAgeSeconds: number;
-  readonly record: SessionRecord;
+  readonly record: PrincipalSessionRecord;
   readonly token: string;
 }
 
@@ -38,7 +44,7 @@ export class AuthService {
   public async login(usernameValue: unknown, passwordValue: unknown, networkSignal: string) {
     const rawUsername = typeof usernameValue === "string" ? usernameValue : "";
     const password = typeof passwordValue === "string" ? passwordValue : "";
-    const normalized = normalizeUsername(rawUsername).slice(0, 64);
+    const normalized = normalizeUsername(rawUsername).slice(0, 320);
     const accountDigest = digestRateLimitSignal(`account:${normalized}`);
     const networkDigest = digestRateLimitSignal(`network:${networkSignal}`);
     try {
@@ -57,13 +63,18 @@ export class AuthService {
       );
     }
 
-    const candidate = await this.store.findOwnerForLogin(normalized);
-    const timingOwner = candidate ?? (await this.store.getOnlyOwnerCredential());
+    const candidate = await this.store.findUserForLogin(normalized);
+    const timingOwner = candidate ?? (await this.store.getOnlyUserCredential());
     const passwordMatches =
       timingOwner === null
         ? false
         : await verifyPassword(timingOwner.passwordHash, password || "invalid");
-    if (candidate === null || !passwordMatches) {
+    if (
+      candidate === null ||
+      !passwordMatches ||
+      candidate.userStatus !== "active" ||
+      candidate.membershipStatus !== "active"
+    ) {
       await this.store.recordLoginAttempt(accountDigest, networkDigest, "failed");
       throw new SafeApplicationError("invalid_credentials", INVALID_LOGIN_MESSAGE, 401);
     }
@@ -73,11 +84,11 @@ export class AuthService {
     return this.createSession(candidate);
   }
 
-  private async createSession(owner: Parameters<OpsWeaveStore["createSession"]>[0]) {
+  private async createSession(user: UserCredentialRecord) {
     const now = this.clock();
     const token = createToken();
-    const record = await this.store.createSession(
-      owner,
+    const record = await this.store.createPrincipalSession(
+      user,
       digestSessionToken(token),
       createSessionTimes(now),
     );
@@ -88,16 +99,20 @@ export class AuthService {
     } satisfies CreatedSession;
   }
 
-  public async authenticateToken(token: string | null): Promise<SessionRecord> {
+  public async authenticatePrincipalToken(token: string | null): Promise<PrincipalSessionRecord> {
     if (token === null || token.length < 32 || token.length > 128) {
       throw new SafeApplicationError("authentication_required", "Authentication is required.", 401);
     }
-    const session = await this.store.findSessionByDigest(digestSessionToken(token));
+    const session = await this.store.findPrincipalSessionByDigest(digestSessionToken(token));
     if (session === null) {
       throw new SafeApplicationError("authentication_required", "Authentication is required.", 401);
     }
     const now = this.clock();
     if (getSessionInvalidReason(session, now) !== null) {
+      await this.store.revokeSession(session.id);
+      throw new SafeApplicationError("authentication_required", "Authentication is required.", 401);
+    }
+    if (session.userStatus !== "active" || session.membershipStatus !== "active") {
       await this.store.revokeSession(session.id);
       throw new SafeApplicationError("authentication_required", "Authentication is required.", 401);
     }
@@ -110,7 +125,39 @@ export class AuthService {
     return session;
   }
 
-  public async logout(session: SessionRecord): Promise<void> {
+  public async authenticateToken(token: string | null): Promise<SessionRecord> {
+    const principal = await this.authenticatePrincipalToken(token);
+    if (principal.role !== "owner" && principal.role !== "admin") {
+      throw new SafeApplicationError(
+        "forbidden",
+        "This area is available to workspace owners and admins.",
+        403,
+      );
+    }
+    const compatibility =
+      principal.ownerId !== null && principal.username !== null
+        ? { ownerId: principal.ownerId, username: principal.username }
+        : await this.store.getWorkspaceOwnerCompatibility(principal.workspaceId);
+    if (compatibility === null) {
+      throw new SafeApplicationError("authentication_required", "Authentication is required.", 401);
+    }
+    return {
+      absoluteExpiresAt: principal.absoluteExpiresAt,
+      createdAt: principal.createdAt,
+      id: principal.id,
+      idleExpiresAt: principal.idleExpiresAt,
+      lastSeenAt: principal.lastSeenAt,
+      ownerId: compatibility.ownerId,
+      recentAuthenticatedAt: principal.recentAuthenticatedAt,
+      revokedAt: principal.revokedAt,
+      tokenDigest: principal.tokenDigest,
+      username:
+        principal.username ?? principal.email ?? principal.fullName ?? compatibility.username,
+      workspaceId: principal.workspaceId,
+    };
+  }
+
+  public async logout(session: PrincipalSessionRecord | SessionRecord): Promise<void> {
     await this.store.revokeSession(session.id);
   }
 
@@ -118,15 +165,18 @@ export class AuthService {
     currentPassword: unknown;
     newPassword: unknown;
     newPasswordConfirmation: unknown;
-    session: SessionRecord;
+    session: PrincipalSessionRecord;
   }): Promise<CreatedSession> {
-    await this.consumeSensitiveAction(input.session.ownerId);
-    const owner = await this.store.getOnlyOwnerCredential();
-    if (owner?.ownerId !== input.session.ownerId) {
+    await this.consumeSensitiveAction(input.session.userId);
+    const user = await this.store.getUserCredentialById(
+      input.session.workspaceId,
+      input.session.userId,
+    );
+    if (user === null) {
       throw new SafeApplicationError("authentication_required", "Authentication is required.", 401);
     }
     const currentPassword = typeof input.currentPassword === "string" ? input.currentPassword : "";
-    const currentMatches = await verifyPassword(owner.passwordHash, currentPassword || "invalid");
+    const currentMatches = await verifyPassword(user.passwordHash, currentPassword || "invalid");
     let newPassword: string;
     try {
       newPassword = validateNewPassword(
@@ -152,14 +202,11 @@ export class AuthService {
     const now = this.clock();
     const token = createToken();
     try {
-      const record = await this.store.changePassword({
-        credentialVersion: owner.credentialVersion,
+      const record = await this.store.changeUserPassword({
         newPasswordHash,
-        ownerId: owner.ownerId,
         times: createSessionTimes(now),
         tokenDigest: digestSessionToken(token),
-        username: owner.username,
-        workspaceId: owner.workspaceId,
+        user,
       });
       return {
         maxAgeSeconds: Math.floor(SESSION_ABSOLUTE_DURATION_MS / 1_000),
@@ -174,9 +221,9 @@ export class AuthService {
     }
   }
 
-  public async revokeOthers(session: SessionRecord): Promise<number> {
-    await this.consumeSensitiveAction(session.ownerId);
-    return this.store.revokeOtherSessions(session.ownerId, session.workspaceId, session.id);
+  public async revokeOthers(session: PrincipalSessionRecord): Promise<number> {
+    await this.consumeSensitiveAction(session.userId);
+    return this.store.revokeOtherUserSessions(session.userId, session.workspaceId, session.id);
   }
 
   public async consumeSensitiveAction(signal: string): Promise<void> {
