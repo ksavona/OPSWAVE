@@ -358,8 +358,12 @@ JOIN "opsweave"."workspace_memberships" membership
 WHERE session.owner_id=owner.id AND (session.user_id IS NULL OR session.membership_id IS NULL);--> statement-breakpoint
 UPDATE "opsweave"."audit_events" event
 SET actor_user_id=owner.user_id,
-  subject_project_id=CASE WHEN event.target_type='project' AND event.target_id ~* '^[0-9a-f-]{36}$' THEN event.target_id::uuid ELSE event.subject_project_id END,
-  subject_task_id=CASE WHEN event.target_type='task' AND event.target_id ~* '^[0-9a-f-]{36}$' THEN event.target_id::uuid ELSE event.subject_task_id END
+  subject_project_id=CASE WHEN event.target_type='project' AND event.target_id ~* '^[0-9a-f-]{36}$'
+    THEN (SELECT project.id FROM "opsweave"."projects" project WHERE project.id=event.target_id::uuid)
+    ELSE event.subject_project_id END,
+  subject_task_id=CASE WHEN event.target_type='task' AND event.target_id ~* '^[0-9a-f-]{36}$'
+    THEN (SELECT task.id FROM "opsweave"."tasks" task WHERE task.id=event.target_id::uuid)
+    ELSE event.subject_task_id END
 FROM "opsweave"."owners" owner
 WHERE event.actor_owner_id=owner.id;--> statement-breakpoint
 UPDATE "opsweave"."projects" project SET created_by_user_id=owner.user_id
