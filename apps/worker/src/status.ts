@@ -1,11 +1,13 @@
 export interface WorkerStatus {
-  readonly liveJobsEnabled: false;
+  readonly liveJobsEnabled: boolean;
+  readonly provider: string;
   readonly service: "opsweave-worker";
-  readonly state: "foundation-ready";
+  readonly state: "foundation-ready" | "operational";
 }
 
-export const getWorkerStatus = (): WorkerStatus => ({
-  liveJobsEnabled: false,
+export const getWorkerStatus = (provider = "deterministic-fake"): WorkerStatus => ({
+  liveJobsEnabled: provider !== "deterministic-fake",
+  provider,
   service: "opsweave-worker",
-  state: "foundation-ready",
+  state: provider === "deterministic-fake" ? "foundation-ready" : "operational",
 });

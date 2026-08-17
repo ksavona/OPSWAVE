@@ -1,124 +1,152 @@
 "use client";
-/* eslint-disable security/detect-object-injection -- keys are constrained to local literal unions. */
 
-import { useState, type SyntheticEvent } from "react";
+import { dependencyMermaid } from "@opsweave/domain/work";
+import {
+  useMemo,
+  useId,
+  useRef,
+  useState,
+  type DragEvent,
+  type CSSProperties,
+  type MouseEvent,
+  type SyntheticEvent,
+} from "react";
 
-const WORKFLOW_LANES = [
-  "inbox",
-  "this_week",
-  "today_1",
-  "today_2",
-  "today_3",
-  "in_focus",
-  "monitor_validate",
-  "waiting",
-  "delegated",
-  "done",
-  "cancelled",
-] as const;
-type KanbanSortMode = "greatest_value" | "manual" | "planning_priority";
-const WORKFLOW_LANE_LABELS: Record<(typeof WORKFLOW_LANES)[number], string> = {
-  cancelled: "Cancelled",
-  delegated: "Delegated",
-  done: "Done",
-  in_focus: "In Focus",
-  inbox: "Inbox",
-  monitor_validate: "Monitor / Validate",
-  this_week: "This Week",
-  today_1: "Today 1",
-  today_2: "Today 2",
-  today_3: "Today 3",
-  waiting: "Waiting",
-};
+import { ProjectEditor, TaskEditor } from "./entity-editors";
+import { GanttChart } from "./gantt-chart";
+import { KanbanBoard } from "./kanban-board";
+import { MermaidDiagram } from "./mermaid-diagram";
+import {
+  WORKFLOW_LANES,
+  WORK_STATUSES,
+  workStatusLabel,
+  workflowLaneLabel,
+  type KanbanSortMode,
+  type Project,
+  type ProjectMetrics,
+  type Stage,
+  type Task,
+  type WorkspaceData,
+  type WorkflowLane,
+} from "./workspace-types";
+import {
+  automationRunMessage,
+  optionalFormNumber,
+  optionalFormText,
+  workspaceRequest,
+} from "./workspace-api";
 
-interface Stage {
-  archivedAt: string | null;
-  description: string | null;
-  id: string;
-  llmContext: string | null;
-  name: string;
-  sequence: number;
-  version: number;
-}
-interface Project {
-  archivedAt: string | null;
-  createdAt: string;
-  description: string | null;
-  id: string;
-  name: string;
-  stageId: string | null;
-  stageName: string | null;
-  version: number;
-}
-interface Task {
-  allocatedHours: number | null;
-  businessValueRationale: string | null;
-  businessValueScore: number | null;
-  checklist: { completed: boolean; id: string; label: string; position: number }[];
-  definitionOfDone: string | null;
-  dueDate: string | null;
-  id: string;
-  manualLanePosition: number;
-  projectId: string | null;
-  size: "large" | "medium" | "small" | null;
-  title: string;
-  valueAdd: string | null;
-  valueSource: "ai_proposed" | "imported" | "owner" | null;
-  version: number;
-  workDescription: string | null;
-  workflowLane: (typeof WORKFLOW_LANES)[number];
-}
-interface WorkspaceData {
-  blockerCounts: Record<string, number>;
-  dependencies: { dependsOnTaskId: string; taskId: string }[];
-  projectMetrics: Record<
-    string,
-    {
-      allocatedHours: number;
-      endDate: string | null;
-      progressPercent: number;
-      startDate: string | null;
-    }
-  >;
-  projects: Project[];
-  sort: KanbanSortMode;
-  stages: Stage[];
-  tasks: Task[];
-}
+type Selection = { id: string; type: "project" | "task" } | null;
+type OpenRecord = Selection;
 
-const request = async (url: string, method: string, payload?: unknown) => {
-  const response = await fetch(url, {
-    ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
-    cache: "no-store",
-    headers: { "content-type": "application/json" },
-    method,
-  });
-  const body = (await response.json()) as Record<string, unknown>;
-  if (!response.ok) {
-    const error = new Error(
-      typeof body.message === "string" ? body.message : "The request failed.",
-    );
-    Object.assign(error, { status: response.status });
-    throw error;
+const DAY_MS = 86_400_000;
+export const taskDeadlineVisual = (
+  task: Pick<Task, "dueDate" | "workflowLane">,
+  now = Date.now(),
+): { color: string | null; overdue: boolean } => {
+  if (task.dueDate === null || task.workflowLane === "done" || task.workflowLane === "cancelled")
+    return { color: null, overdue: false };
+  const deadline = Date.parse(`${task.dueDate}T23:59:59.999Z`);
+  const daysRemaining = (deadline - now) / DAY_MS;
+  if (daysRemaining < 0) return { color: "#ff453a", overdue: true };
+  if (daysRemaining > 60) return { color: "#edf3ef", overdue: false };
+  if (daysRemaining > 30) {
+    const yellowPercent = ((60 - daysRemaining) / 30) * 100;
+    return {
+      color: `color-mix(in srgb, #edf3ef ${String(100 - yellowPercent)}%, #ffd166 ${String(yellowPercent)}%)`,
+      overdue: false,
+    };
   }
-  return body;
+  const hue = Math.max(0, (daysRemaining / 30) * 48);
+  return { color: `hsl(${String(hue)} 92% 62%)`, overdue: false };
 };
-
-const optionalInput = (value: FormDataEntryValue | null): FormDataEntryValue | null =>
-  value === "" ? null : value;
 
 const sortLabels: Record<KanbanSortMode, string> = {
+  dependency: "Dependency order",
   greatest_value: "Greatest value",
   manual: "Manual",
   planning_priority: "Planning priority",
 };
 
+const clientValue = (value: FormDataEntryValue | null): string | null => {
+  const normalized = optionalFormText(value);
+  return normalized?.toLocaleLowerCase() === "personal" ? null : normalized;
+};
+
+const priorityLevelLabel = (value: number | null | undefined): string => {
+  const labels = [
+    "Lowest priority",
+    "Low priority",
+    "Medium priority",
+    "High priority",
+    "Highest priority",
+  ];
+  return value === null || value === undefined ? "Not set" : (labels[value - 1] ?? "Not set");
+};
+
+const ClientField = ({
+  clientNames,
+  defaultValue,
+  disabled = false,
+}: {
+  clientNames: string[];
+  defaultValue?: string | null | undefined;
+  disabled?: boolean;
+}) => {
+  const listId = useId();
+  return (
+    <label>
+      Client
+      <input
+        defaultValue={defaultValue ?? ""}
+        disabled={disabled}
+        list={listId}
+        name="clientName"
+        placeholder={disabled ? "Inherited from project" : "Personal or client name"}
+      />
+      <datalist id={listId}>
+        <option value="Personal" />
+        {clientNames.map((name) => (
+          <option key={name} value={name} />
+        ))}
+      </datalist>
+    </label>
+  );
+};
+
 export const Workspace = ({ initial }: { initial: WorkspaceData }) => {
   const [data, setData] = useState(initial);
+  const [automationRunning, setAutomationRunning] = useState<"daily" | "weekly" | null>(null);
   const [message, setMessage] = useState("");
+  const [openRecord, setOpenRecord] = useState<OpenRecord>(null);
+  const [selection, setSelection] = useState<Selection>(null);
+  const [projectSearch, setProjectSearch] = useState("");
+  const [projectCondensed, setProjectCondensed] = useState(true);
+  const [projectOrder, setProjectOrder] = useState<"manual" | "next_deadline">("manual");
+  const [sortChanging, setSortChanging] = useState(false);
+  const [taskSearch, setTaskSearch] = useState("");
+  const [taskCondensed, setTaskCondensed] = useState(true);
+  const lastCardClick = useRef<{ at: number; id: string; type: "project" | "task" } | null>(null);
+  const activateCard = (record: { id: string }, type: "project" | "task") => {
+    const now = Date.now();
+    const previous = lastCardClick.current;
+    if (
+      previous !== null &&
+      previous.id === record.id &&
+      previous.type === type &&
+      now - previous.at <= 600
+    ) {
+      lastCardClick.current = null;
+      setMessage("");
+      setOpenRecord({ id: record.id, type });
+      return;
+    }
+    lastCardClick.current = { at: now, id: record.id, type };
+    setSelection({ id: record.id, type });
+  };
   const refresh = async (sort = data.sort) => {
     try {
-      const result = (await request(
+      const result = (await workspaceRequest(
         `/api/workspace?sort=${sort}`,
         "GET",
       )) as unknown as WorkspaceData;
@@ -130,27 +158,208 @@ export const Workspace = ({ initial }: { initial: WorkspaceData }) => {
   };
   const changeSort = async (sort: KanbanSortMode) => {
     window.history.replaceState(null, "", `/?sort=${sort}`);
-    await refresh(sort);
+    setSortChanging(true);
+    try {
+      await refresh(sort);
+    } finally {
+      setSortChanging(false);
+    }
   };
+  const runAutomation = async (kind: "daily" | "weekly") => {
+    if (
+      kind === "weekly" &&
+      !window.confirm(
+        "Run weekly planning now? Unlocked incomplete Today and This Week tasks will be re-prioritised.",
+      )
+    )
+      return;
+    setAutomationRunning(kind);
+    try {
+      const result = await workspaceRequest("/api/planning/run", "POST", { kind });
+      await refresh();
+      setMessage(automationRunMessage(result, kind));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to run planning.");
+    } finally {
+      setAutomationRunning(null);
+    }
+  };
+
+  const filtered = useMemo(() => {
+    if (selection === null) {
+      const matches = (haystack: string, query: string) =>
+        query.trim() === "" ||
+        haystack.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+      const projectText = (project: Project) =>
+        `${project.name} ${project.clientName ?? "personal"} ${project.stageName ?? ""} ${project.status ?? "not_started"} ${priorityLevelLabel(project.priorityLevel)}`;
+      const taskText = (task: Task) => {
+        const project = data.projects.find((candidate) => candidate.id === task.projectId);
+        return `${task.title} ${task.clientName ?? "personal"} ${task.size ?? ""} ${task.status ?? "not_started"} ${priorityLevelLabel(task.priorityLevel)} ${project?.name ?? ""}`;
+      };
+      const projectScopedTasks = data.tasks.filter((task) => {
+        const project = data.projects.find((candidate) => candidate.id === task.projectId);
+        return matches(
+          `${task.clientName ?? "personal"} ${project === undefined ? "" : projectText(project)}`,
+          projectSearch,
+        );
+      });
+      const tasks = projectScopedTasks.filter((task) => matches(taskText(task), taskSearch));
+      const taskProjectIds = new Set(tasks.flatMap((task) => task.projectId ?? []));
+      return {
+        projects: data.projects.filter(
+          (project) =>
+            matches(projectText(project), projectSearch) &&
+            (taskSearch.trim() === "" || taskProjectIds.has(project.id)),
+        ),
+        tasks,
+      };
+    }
+    if (selection.type === "project")
+      return {
+        projects: data.projects.filter((project) => project.id === selection.id),
+        tasks: data.tasks.filter((task) => task.projectId === selection.id),
+      };
+    const selectedTask = data.tasks.find((task) => task.id === selection.id);
+    const relatedTaskIds = new Set([
+      selection.id,
+      ...data.dependencies.flatMap((edge) =>
+        edge.taskId === selection.id
+          ? [edge.dependsOnTaskId]
+          : edge.dependsOnTaskId === selection.id
+            ? [edge.taskId]
+            : [],
+      ),
+    ]);
+    return {
+      projects: data.projects.filter((project) => project.id === selectedTask?.projectId),
+      tasks: data.tasks.filter((task) => relatedTaskIds.has(task.id)),
+    };
+  }, [data, projectSearch, selection, taskSearch]);
+  const openTask =
+    openRecord?.type === "task"
+      ? (data.tasks.find((task) => task.id === openRecord.id) ?? null)
+      : null;
+  const openProject =
+    openRecord?.type === "project"
+      ? (data.projects.find((project) => project.id === openRecord.id) ?? null)
+      : null;
+  const deselectOutsideCards = (event: MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (
+      target.closest("[data-selectable-card]") === null &&
+      target.closest(".entity-modal") === null
+    )
+      setSelection(null);
+  };
+
   return (
-    <div className="workspace-layout">
+    <div className="workspace-layout" onClick={deselectOutsideCards}>
       <p className="form-message" aria-live="polite">
         {message}
       </p>
+      <details className="automation-menu">
+        <summary>Automations</summary>
+        <div className="button-row">
+          <button
+            disabled={automationRunning !== null}
+            onClick={() => void runAutomation("daily")}
+            type="button"
+          >
+            {automationRunning === "daily" ? "Planning…" : "Run daily planning"}
+          </button>
+          <button
+            className="secondary"
+            disabled={automationRunning !== null}
+            onClick={() => void runAutomation("weekly")}
+            type="button"
+          >
+            {automationRunning === "weekly" ? "Planning…" : "Run weekly planning"}
+          </button>
+        </div>
+        {automationRunning === null ? null : (
+          <p aria-live="assertive" className="automation-progress" role="status">
+            Waiting for planning and any required LLM response…
+          </p>
+        )}
+      </details>
+      {selection === null ? null : (
+        <div className="selection-banner" role="status">
+          Showing records related to the selected {selection.type}. Click outside a card to clear.
+          <button
+            className="secondary compact"
+            onClick={() => {
+              setSelection(null);
+            }}
+            type="button"
+          >
+            Show all
+          </button>
+        </div>
+      )}
       <section aria-labelledby="projects-heading" className="workspace-section">
         <div className="section-heading">
           <div>
             <p className="eyebrow">Project Kanban</p>
             <h1 id="projects-heading">Projects</h1>
           </div>
-          <ProjectForm stages={data.stages} onCreated={refresh} setMessage={setMessage} />
+        </div>
+        <p className="interaction-hint">
+          Single-click filters related work. Double-click opens all project details.
+        </p>
+        <div className="board-toolbar">
+          <label className="board-search">
+            Search projects
+            <input
+              onChange={(event) => {
+                setProjectSearch(event.target.value);
+              }}
+              placeholder="Client, name, priority, status…"
+              type="search"
+              value={projectSearch}
+            />
+          </label>
+          <label className="project-sort-control">
+            Project board order
+            <select
+              aria-label="Project sorting"
+              onChange={(event) => {
+                setProjectOrder(event.target.value as "manual" | "next_deadline");
+              }}
+              value={projectOrder}
+            >
+              <option value="manual">Manual</option>
+              <option value="next_deadline">Next deadline</option>
+            </select>
+          </label>
+          <button
+            aria-label={projectCondensed ? "Expand project stages" : "Condense project stages"}
+            className="secondary icon-button kanban-limit-toggle"
+            onClick={() => {
+              setProjectCondensed((current) => !current);
+            }}
+            title={projectCondensed ? "Expand project stages" : "Condense project stages"}
+            type="button"
+          >
+            {projectCondensed ? "⇲" : "⇱"}
+          </button>
         </div>
         <ProjectBoard
-          projectMetrics={data.projectMetrics}
-          projects={data.projects}
-          stages={data.stages}
-          onChanged={() => void refresh()}
+          clientNames={data.clientNames ?? []}
+          condensed={projectCondensed}
+          metrics={data.projectMetrics}
+          onChanged={refresh}
+          onOpen={(project) => {
+            setMessage("");
+            setOpenRecord({ id: project.id, type: "project" });
+          }}
+          onSelect={(project) => {
+            activateCard(project, "project");
+          }}
+          projects={filtered.projects}
+          projectOrder={projectOrder}
+          selected={selection}
           setMessage={setMessage}
+          stages={data.stages}
         />
       </section>
       <section aria-labelledby="tasks-heading" className="workspace-section">
@@ -159,6 +368,23 @@ export const Workspace = ({ initial }: { initial: WorkspaceData }) => {
             <p className="eyebrow">Global task board</p>
             <h2 id="tasks-heading">Tasks</h2>
           </div>
+        </div>
+        <p className="interaction-hint">
+          Drag tasks between stages. Single-click filters related records; double-click opens the
+          full task.
+        </p>
+        <div className="board-toolbar">
+          <label className="board-search">
+            Search tasks
+            <input
+              onChange={(event) => {
+                setTaskSearch(event.target.value);
+              }}
+              placeholder="Title, size, project, priority, status…"
+              type="search"
+              value={taskSearch}
+            />
+          </label>
           <label className="sort-control">
             Board order
             <select
@@ -172,239 +398,114 @@ export const Workspace = ({ initial }: { initial: WorkspaceData }) => {
               ))}
             </select>
           </label>
+          <button
+            aria-label={taskCondensed ? "Expand task stages" : "Condense task stages"}
+            className="secondary icon-button kanban-limit-toggle"
+            onClick={() => {
+              setTaskCondensed((current) => !current);
+            }}
+            title={taskCondensed ? "Expand task stages" : "Condense task stages"}
+            type="button"
+          >
+            {taskCondensed ? "⇲" : "⇱"}
+          </button>
         </div>
-        <p className="board-explanation">
-          {data.sort === "manual"
-            ? "Manual order is persisted independently in every lane. Use the earlier/later controls to reorder a task."
-            : `${sortLabels[data.sort]} is computed by the server within each lane. Cross-lane movement is available; manual positions are unchanged.`}
-        </p>
-        <TaskForm projects={data.projects} onCreated={refresh} setMessage={setMessage} />
-        <TaskBoard data={data} onChanged={() => void refresh()} setMessage={setMessage} />
+        <TaskBoard
+          clientNames={data.clientNames ?? []}
+          condensed={taskCondensed}
+          onChanged={refresh}
+          onOpen={(task) => {
+            setMessage("");
+            setOpenRecord({ id: task.id, type: "task" });
+          }}
+          onSelect={(task) => {
+            activateCard(task, "task");
+          }}
+          selected={selection}
+          setMessage={setMessage}
+          tasks={filtered.tasks}
+          projects={data.projects}
+          updating={sortChanging}
+        />
       </section>
-      <StageManager stages={data.stages} onChanged={() => void refresh()} setMessage={setMessage} />
-      <TaskTimeline tasks={data.tasks} />
-      <DependencyGraph
-        blockerCounts={data.blockerCounts}
-        dependencies={data.dependencies}
-        onChanged={() => void refresh()}
-        setMessage={setMessage}
-        tasks={data.tasks}
+      <section className="workspace-section" aria-labelledby="timeline-heading">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Task Gantt</p>
+            <h2 id="timeline-heading">Schedule</h2>
+          </div>
+        </div>
+        <GanttChart
+          onChanged={refresh}
+          onOpenEntity={({ id, type }) => {
+            setMessage("");
+            setOpenRecord({ id, type });
+          }}
+          {...(selection?.type === "project" ? { projectId: selection.id } : {})}
+          projectMetrics={data.projectMetrics}
+          projects={data.projects.filter((project) => project.archivedAt === null)}
+          tasks={selection?.type === "project" ? filtered.tasks : data.tasks}
+          workingDays={data.workingDays ?? []}
+        />
+      </section>
+      <DependencyMap
+        data={data}
+        onOpenEntity={({ id, type }) => {
+          setMessage("");
+          setOpenRecord({ id, type });
+        }}
       />
+      {openTask === null ? null : (
+        <TaskEditor
+          data={data}
+          message={message}
+          onChanged={refresh}
+          onClose={() => {
+            setOpenRecord(null);
+          }}
+          onDeleted={() => {
+            setOpenRecord(null);
+            setSelection(null);
+          }}
+          onOpenEntity={({ id, type }) => {
+            setMessage("");
+            setOpenRecord({ id, type });
+          }}
+          setMessage={setMessage}
+          task={openTask}
+        />
+      )}
+      {openProject === null ? null : (
+        <ProjectEditor
+          data={data}
+          message={message}
+          onChanged={refresh}
+          onClose={() => {
+            setOpenRecord(null);
+          }}
+          onOpenEntity={({ id, type }) => {
+            setMessage("");
+            setOpenRecord({ id, type });
+          }}
+          project={openProject}
+          setMessage={setMessage}
+        />
+      )}
     </div>
   );
 };
 
-const TaskTimeline = ({ tasks }: { tasks: Task[] }) => {
-  const [scale, setScale] = useState("month");
-  const dated = tasks
-    .filter((task) => task.dueDate !== null)
-    .sort((left, right) => left.dueDate?.localeCompare(right.dueDate ?? "") ?? 0);
-  return (
-    <section className="workspace-section" aria-labelledby="timeline-heading">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Task Gantt</p>
-          <h2 id="timeline-heading">Timeline</h2>
-        </div>
-        <label className="sort-control">
-          Timeline scale
-          <select
-            onChange={(event) => {
-              setScale(event.target.value);
-            }}
-            value={scale}
-          >
-            {["day", "week", "month", "three_month", "six_month", "one_year"].map((value) => (
-              <option key={value} value={value}>
-                {value.replaceAll("_", " ")}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      <p className="muted">
-        {scale.replaceAll("_", " ")} view. Project dates are derived from task dates.
-      </p>
-      {dated.length === 0 ? (
-        <p>No dated tasks yet.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Task</th>
-              <th>Due date</th>
-              <th>Allocated hours</th>
-            </tr>
-          </thead>
-          <tbody>
-            {dated.map((task) => (
-              <tr key={task.id}>
-                <td>{task.title}</td>
-                <td>{task.dueDate}</td>
-                <td>{task.allocatedHours ?? 0}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {tasks.some((task) => task.dueDate === null) ? (
-        <p className="muted">
-          Undated tasks are not placed on the timeline:{" "}
-          {tasks
-            .filter((task) => task.dueDate === null)
-            .map((task) => task.title)
-            .join(", ")}
-        </p>
-      ) : null}
-    </section>
-  );
-};
-
-const DependencyGraph = ({
-  blockerCounts,
-  dependencies,
-  onChanged,
-  setMessage,
-  tasks,
-}: {
-  blockerCounts: WorkspaceData["blockerCounts"];
-  dependencies: WorkspaceData["dependencies"];
-  onChanged: () => void;
-  setMessage: (value: string) => void;
-  tasks: Task[];
-}) => {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const tasksById = new Map(tasks.map((task) => [task.id, task]));
-  const selected = selectedId === null ? null : (tasksById.get(selectedId) ?? null);
-  const selectedEdges =
-    selected === null ? [] : dependencies.filter((edge) => edge.taskId === selected.id);
-  const add = async (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
-    event.preventDefault();
-    if (selected === null) return;
-    const dependsOnTaskId = new FormData(event.currentTarget).get("dependsOnTaskId");
-    try {
-      await request(`/api/tasks/${selected.id}/dependencies`, "POST", { dependsOnTaskId });
-      onChanged();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to create dependency.");
-    }
-  };
-  const remove = async (dependsOnTaskId: string) => {
-    if (selected === null) return;
-    try {
-      await request(`/api/tasks/${selected.id}/dependencies/${dependsOnTaskId}`, "DELETE");
-      onChanged();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to remove dependency.");
-    }
-  };
-  return (
-    <section className="workspace-section" aria-labelledby="dependencies-heading">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Task graph</p>
-          <h2 id="dependencies-heading">Dependencies</h2>
-        </div>
-      </div>
-      <p className="muted">
-        Select a task to inspect its direct blockers. Dependency edges are validated on the server
-        and cannot form cycles.
-      </p>
-      <ul className="stage-list">
-        {tasks.map((task) => (
-          <li key={task.id}>
-            <button
-              className="secondary"
-              onClick={() => {
-                setSelectedId(task.id);
-              }}
-              type="button"
-            >
-              {task.title}
-            </button>
-          </li>
-        ))}
-      </ul>
-      {selected ? (
-        <aside aria-live="polite">
-          <h3>{selected.title}</h3>
-          <p>
-            {selectedEdges.length === 0
-              ? "No direct blockers."
-              : `Blocked by: ${selectedEdges
-                  .map((edge) => tasksById.get(edge.dependsOnTaskId)?.title ?? "Unknown task")
-                  .join(", ")}`}
-          </p>
-          <p className="muted">Transitive blockers: {blockerCounts[selected.id] ?? 0}</p>
-          <form
-            className="move-form"
-            onSubmit={(event) => {
-              void add(event);
-            }}
-          >
-            <label>
-              Add blocker
-              <select name="dependsOnTaskId" required>
-                <option value="">Choose task</option>
-                {tasks
-                  .filter(
-                    (task) =>
-                      task.id !== selected.id &&
-                      !selectedEdges.some((edge) => edge.dependsOnTaskId === task.id),
-                  )
-                  .map((task) => (
-                    <option key={task.id} value={task.id}>
-                      {task.title}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <button disabled={tasks.length < 2} type="submit">
-              Add dependency
-            </button>
-          </form>
-          {selectedEdges.map((edge) => (
-            <button
-              className="secondary"
-              key={edge.dependsOnTaskId}
-              onClick={() => void remove(edge.dependsOnTaskId)}
-              type="button"
-            >
-              Remove {tasksById.get(edge.dependsOnTaskId)?.title ?? "dependency"}
-            </button>
-          ))}
-        </aside>
-      ) : null}
-      <details>
-        <summary>Mermaid export</summary>
-        <textarea
-          aria-label="Mermaid dependency export"
-          readOnly
-          value={[
-            "flowchart LR",
-            ...dependencies.flatMap((edge) => {
-              const task = tasksById.get(edge.taskId);
-              const blocker = tasksById.get(edge.dependsOnTaskId);
-              return task === undefined || blocker === undefined
-                ? []
-                : [
-                    `${edge.dependsOnTaskId}["${blocker.title.replaceAll('"', '\\"')}"] --> ${edge.taskId}["${task.title.replaceAll('"', '\\"')}"]`,
-                  ];
-            }),
-          ].join("\n")}
-        />
-      </details>
-    </section>
-  );
-};
-
 const ProjectForm = ({
-  stages,
+  clientNames,
+  defaultStageId,
   onCreated,
   setMessage,
+  stages,
 }: {
+  clientNames: string[];
+  defaultStageId: string;
   onCreated: () => Promise<void>;
-  setMessage: (value: string) => void;
+  setMessage: (message: string) => void;
   stages: Stage[];
 }) => {
   const [open, setOpen] = useState(false);
@@ -412,158 +513,55 @@ const ProjectForm = ({
     event.preventDefault();
     const form = event.currentTarget;
     const values = new FormData(form);
-    form.reset();
     try {
-      await request("/api/projects", "POST", {
-        description: optionalInput(values.get("description")),
+      await workspaceRequest("/api/projects", "POST", {
+        clientName: clientValue(values.get("clientName")),
+        description: optionalFormText(values.get("description")),
+        llmLink: optionalFormText(values.get("llmLink")),
         name: values.get("name"),
-        stageId: optionalInput(values.get("stageId")),
+        priorityLevel: optionalFormNumber(values.get("priorityLevel")),
+        stageId: optionalFormText(values.get("stageId")),
+        status: values.get("status"),
       });
+      form.reset();
       setOpen(false);
       await onCreated();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to create project.");
     }
   };
-  return open ? (
-    <form
-      className="compact-form"
-      onSubmit={(event) => {
-        void submit(event);
-      }}
-    >
-      <label>
-        Project name
-        <input name="name" required />
-      </label>
-      <label>
-        Stage
-        <select name="stageId">
-          <option value="">First active stage</option>
-          {stages
-            .filter((stage) => stage.archivedAt === null)
-            .map((stage) => (
-              <option key={stage.id} value={stage.id}>
-                {stage.name}
-              </option>
-            ))}
-        </select>
-      </label>
-      <label>
-        Description
-        <textarea name="description" maxLength={10000} />
-      </label>
-      <div className="button-row">
-        <button type="submit">Create project</button>
-        <button
-          className="secondary"
-          onClick={() => {
-            setOpen(false);
-          }}
-          type="button"
-        >
-          Cancel
-        </button>
-      </div>
-    </form>
-  ) : (
-    <button
-      onClick={() => {
-        setOpen(true);
-      }}
-      type="button"
-    >
-      New project
-    </button>
-  );
-};
-
-const ProjectBoard = ({
-  projectMetrics,
-  projects,
-  stages,
-  onChanged,
-  setMessage,
-}: {
-  onChanged: () => void;
-  projectMetrics: WorkspaceData["projectMetrics"];
-  projects: Project[];
-  setMessage: (value: string) => void;
-  stages: Stage[];
-}) => (
-  <div className="project-board" aria-label="Project stages">
-    {stages
-      .filter((stage) => stage.archivedAt === null)
-      .map((stage) => (
-        <section
-          className="project-column"
-          key={stage.id}
-          aria-label={`Project stage: ${stage.name}`}
-        >
-          <h2 id={`stage-${stage.id}`}>{stage.name}</h2>
-          {projects
-            .filter((project) => project.stageId === stage.id && project.archivedAt === null)
-            .map((project) => (
-              <ProjectCard
-                key={project.id}
-                project={project}
-                metrics={projectMetrics[project.id]}
-                stages={stages}
-                onChanged={onChanged}
-                setMessage={setMessage}
-              />
-            ))}
-        </section>
-      ))}
-  </div>
-);
-
-const ProjectCard = ({
-  metrics,
-  onChanged,
-  project,
-  setMessage,
-  stages,
-}: {
-  metrics: WorkspaceData["projectMetrics"][string] | undefined;
-  onChanged: () => void;
-  project: Project;
-  setMessage: (value: string) => void;
-  stages: Stage[];
-}) => {
-  const [editing, setEditing] = useState(false);
-  const submit = async (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
-    event.preventDefault();
-    const values = new FormData(event.currentTarget);
-    try {
-      await request(`/api/projects/${project.id}`, "PUT", {
-        archived: false,
-        description: optionalInput(values.get("description")),
-        name: values.get("name"),
-        stageId: optionalInput(values.get("stageId")),
-        version: project.version,
-      });
-      setEditing(false);
-      onChanged();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to update project.");
-    }
-  };
-  if (editing)
+  if (!open)
     return (
-      <form
-        className="project-card"
-        onSubmit={(event) => {
-          void submit(event);
+      <button
+        aria-label="Add project to this stage"
+        className="kanban-add-button"
+        onClick={() => {
+          setOpen(true);
         }}
+        type="button"
       >
+        +
+      </button>
+    );
+  return (
+    <div
+      aria-label="Create project"
+      aria-modal="true"
+      className="create-dialog-backdrop"
+      role="dialog"
+    >
+      <form
+        className="compact-form create-popover create-dialog"
+        onSubmit={(event) => void submit(event)}
+      >
+        <h2>New project</h2>
         <label>
-          Project name
-          <input defaultValue={project.name} name="name" required />
+          Project title
+          <input name="name" required />
         </label>
         <label>
           Stage
-          <select defaultValue={project.stageId ?? ""} name="stageId">
+          <select defaultValue={defaultStageId} name="stageId">
             {stages
               .filter((stage) => stage.archivedAt === null)
               .map((stage) => (
@@ -574,15 +572,41 @@ const ProjectCard = ({
           </select>
         </label>
         <label>
+          Priority level (1–5)
+          <select name="priorityLevel">
+            <option value="">Not set</option>
+            {[1, 2, 3, 4, 5].map((value) => (
+              <option key={value} value={value}>
+                {priorityLevelLabel(value)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Status
+          <select defaultValue="not_started" name="status">
+            {WORK_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {workStatusLabel(status)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <ClientField clientNames={clientNames} />
+        <label>
           Description
-          <textarea defaultValue={project.description ?? ""} name="description" />
+          <textarea name="description" />
+        </label>
+        <label>
+          LLM link
+          <input name="llmLink" type="url" />
         </label>
         <div className="button-row">
-          <button type="submit">Save project</button>
+          <button type="submit">Create project</button>
           <button
             className="secondary"
             onClick={() => {
-              setEditing(false);
+              setOpen(false);
             }}
             type="button"
           >
@@ -590,528 +614,729 @@ const ProjectCard = ({
           </button>
         </div>
       </form>
-    );
-  return (
-    <article className="project-card">
-      <h3>{project.name}</h3>
-      {metrics ? (
-        <p className="muted">
-          {metrics.allocatedHours}h · {Math.round(metrics.progressPercent)}% complete ·{" "}
-          {metrics.startDate ?? "No start date"} to {metrics.endDate ?? "No end date"}
-        </p>
-      ) : null}
-      {project.description ? (
-        <p>{project.description}</p>
-      ) : (
-        <p className="muted">No description yet.</p>
-      )}
-      <button
-        className="secondary"
-        onClick={() => {
-          setEditing(true);
-        }}
-        type="button"
-      >
-        Edit project
-      </button>
-    </article>
+    </div>
   );
 };
 
+const ProjectBoard = ({
+  clientNames,
+  condensed,
+  metrics,
+  onChanged,
+  onOpen,
+  onSelect,
+  projects,
+  projectOrder,
+  selected,
+  setMessage,
+  stages,
+}: {
+  clientNames: string[];
+  condensed: boolean;
+  metrics: Record<string, ProjectMetrics>;
+  onChanged: () => Promise<void>;
+  onOpen: (project: Project) => void;
+  onSelect: (project: Project) => void;
+  projects: Project[];
+  projectOrder: "manual" | "next_deadline";
+  selected: Selection;
+  setMessage: (message: string) => void;
+  stages: Stage[];
+}) => {
+  const draggedProjectId = useRef<string | null>(null);
+  const [collapsedStageIds, setCollapsedStageIds] = useState(
+    () =>
+      new Set(
+        stages
+          .filter((stage) => /^(done|cancelled)$/iu.test(stage.name.trim()))
+          .map((stage) => stage.id),
+      ),
+  );
+  const drop = async (event: DragEvent<HTMLElement>, stageId: string) => {
+    event.preventDefault();
+    const id =
+      draggedProjectId.current ?? event.dataTransfer.getData("application/x-opsweave-project");
+    draggedProjectId.current = null;
+    const project = projects.find((candidate) => candidate.id === id);
+    if (project === undefined || project.stageId === stageId) return;
+    try {
+      await workspaceRequest(`/api/projects/${project.id}`, "PUT", {
+        archived: false,
+        clientName: project.clientName ?? null,
+        description: project.description,
+        llmLink: project.llmLink,
+        name: project.name,
+        notes: project.notes,
+        priorityLevel: project.priorityLevel ?? null,
+        stageId,
+        status: project.status ?? "not_started",
+        version: project.version,
+      });
+      await onChanged();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to move project.");
+    }
+  };
+  return (
+    <div>
+      <KanbanBoard className="project-board" condensed={condensed} label="Project stages">
+        {stages
+          .filter((stage) => stage.archivedAt === null)
+          .map((stage) => {
+            const collapsed = collapsedStageIds.has(stage.id);
+            const stageProjects = projects
+              .filter((project) => project.archivedAt === null && project.stageId === stage.id)
+              .sort((left, right) =>
+                projectOrder === "next_deadline"
+                  ? (metrics[left.id]?.endDate ?? "9999-12-31").localeCompare(
+                      metrics[right.id]?.endDate ?? "9999-12-31",
+                    )
+                  : 0,
+              );
+            return (
+              <section
+                aria-label={`Project stage: ${stage.name}`}
+                className={`project-column${collapsed ? " collapsed" : ""}`}
+                key={stage.id}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                }}
+                onDrop={(event) => void drop(event, stage.id)}
+              >
+                <div className="kanban-stage-heading">
+                  <h2 className="kanban-stage-title">
+                    <button
+                      aria-expanded={!collapsed}
+                      className="kanban-column-heading"
+                      onClick={() => {
+                        setCollapsedStageIds((current) => {
+                          const next = new Set(current);
+                          if (next.has(stage.id)) next.delete(stage.id);
+                          else next.add(stage.id);
+                          return next;
+                        });
+                      }}
+                      type="button"
+                    >
+                      <span>{stage.name}</span>
+                    </button>
+                  </h2>
+                  <ProjectForm
+                    clientNames={clientNames}
+                    defaultStageId={stage.id}
+                    onCreated={onChanged}
+                    setMessage={setMessage}
+                    stages={stages}
+                  />
+                  <button
+                    aria-expanded={!collapsed}
+                    aria-label={`${collapsed ? "Expand" : "Collapse"} ${stage.name}`}
+                    className="kanban-column-count"
+                    onClick={() => {
+                      setCollapsedStageIds((current) => {
+                        const next = new Set(current);
+                        if (next.has(stage.id)) next.delete(stage.id);
+                        else next.add(stage.id);
+                        return next;
+                      });
+                    }}
+                    type="button"
+                  >
+                    {String(stageProjects.length)} {collapsed ? "▸" : "▾"}
+                  </button>
+                </div>
+                {collapsed ? null : (
+                  <div className="kanban-lane-content">
+                    {stageProjects.map((project) => (
+                      <ProjectCard
+                        key={project.id}
+                        metrics={metrics[project.id]}
+                        onOpen={onOpen}
+                        onSelect={onSelect}
+                        onDragStart={(projectId) => {
+                          draggedProjectId.current = projectId;
+                        }}
+                        project={project}
+                        selected={selected?.type === "project" && selected.id === project.id}
+                      />
+                    ))}
+                  </div>
+                )}
+              </section>
+            );
+          })}
+      </KanbanBoard>
+    </div>
+  );
+};
+
+const ProjectCard = ({
+  metrics,
+  onOpen,
+  onSelect,
+  onDragStart,
+  project,
+  selected,
+}: {
+  metrics: ProjectMetrics | undefined;
+  onOpen: (project: Project) => void;
+  onSelect: (project: Project) => void;
+  onDragStart: (projectId: string) => void;
+  project: Project;
+  selected: boolean;
+}) => (
+  <div
+    aria-label={`Project: ${project.name}`}
+    aria-pressed={selected}
+    className={`project-card compact-card status-${project.status ?? "not_started"}${selected ? " selected" : ""}`}
+    data-selectable-card
+    draggable
+    onClick={(event) => {
+      event.stopPropagation();
+      onSelect(project);
+    }}
+    onDragStart={(event) => {
+      onDragStart(project.id);
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("application/x-opsweave-project", project.id);
+    }}
+    onDoubleClick={(event) => {
+      event.stopPropagation();
+      onOpen(project);
+    }}
+    onKeyDown={(event) => {
+      if (event.key === "Enter") onOpen(project);
+    }}
+    onMouseDown={(event) => {
+      if (event.detail >= 2) {
+        event.preventDefault();
+        event.stopPropagation();
+        onOpen(project);
+      }
+    }}
+    role="button"
+    tabIndex={0}
+  >
+    <h3>{project.name}</h3>
+    <dl className="card-metrics">
+      <div>
+        <dt>Spent</dt>
+        <dd>{metrics?.hoursSpent ?? 0}h</dd>
+      </div>
+      <div>
+        <dt>Complete</dt>
+        <dd>{Math.round(metrics?.progressPercent ?? 0)}%</dd>
+      </div>
+      <div>
+        <dt>Start</dt>
+        <dd>{metrics?.startDate ?? "—"}</dd>
+      </div>
+      <div>
+        <dt>End</dt>
+        <dd>{metrics?.endDate ?? "—"}</dd>
+      </div>
+      <div>
+        <dt>Priority</dt>
+        <dd>{priorityLevelLabel(project.priorityLevel)}</dd>
+      </div>
+      <div>
+        <dt>Status</dt>
+        <dd>{workStatusLabel(project.status ?? "not_started")}</dd>
+      </div>
+      <div>
+        <dt>Client</dt>
+        <dd>{project.clientName ?? "Personal"}</dd>
+      </div>
+    </dl>
+  </div>
+);
+
 const TaskForm = ({
+  clientNames,
+  defaultWorkflowLane,
   onCreated,
   projects,
   setMessage,
 }: {
+  clientNames: string[];
+  defaultWorkflowLane: WorkflowLane;
   onCreated: () => Promise<void>;
   projects: Project[];
-  setMessage: (value: string) => void;
+  setMessage: (message: string) => void;
 }) => {
+  const [allocatedHours, setAllocatedHours] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
+  const [selectedProjectId, setSelectedProjectId] = useState("");
   const submit = async (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
     event.preventDefault();
     const form = event.currentTarget;
     const values = new FormData(form);
-    form.reset();
-    const score = values.get("businessValueScore");
+    const score = optionalFormNumber(values.get("businessValueScore"));
     try {
-      await request("/api/tasks", "POST", {
-        businessValueRationale: optionalInput(values.get("businessValueRationale")),
-        businessValueScore: score === "" ? null : Number(score),
-        dueDate: optionalInput(values.get("dueDate")),
-        projectId: optionalInput(values.get("projectId")),
+      await workspaceRequest("/api/tasks", "POST", {
+        allocatedHours: optionalFormNumber(values.get("allocatedHours")),
+        businessValueRationale: optionalFormText(values.get("businessValueRationale")),
+        businessValueScore: score,
+        clientName: clientValue(values.get("clientName")),
+        dueDate: optionalFormText(values.get("dueDate")),
+        endTime: optionalFormText(values.get("endTime")),
+        projectId: optionalFormText(values.get("projectId")),
+        priorityLevel: optionalFormNumber(values.get("priorityLevel")),
+        startDate: optionalFormText(values.get("startDate")),
+        startTime: optionalFormText(values.get("startTime")),
+        status: values.get("status"),
         title: values.get("title"),
-        valueAdd: optionalInput(values.get("valueAdd")),
-        valueSource: score === "" ? null : "owner",
+        valueSource: score === null ? null : "owner",
         workflowLane: values.get("workflowLane"),
       });
+      form.reset();
+      setAllocatedHours(null);
       setOpen(false);
       await onCreated();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to create task.");
     }
   };
-  return open ? (
-    <form
-      className="task-form"
-      onSubmit={(event) => {
-        void submit(event);
-      }}
+  if (!open)
+    return (
+      <button
+        aria-label="Add task to this stage"
+        className="kanban-add-button"
+        onClick={() => {
+          setOpen(true);
+        }}
+        type="button"
+      >
+        +
+      </button>
+    );
+  return (
+    <div
+      aria-label="Create task"
+      aria-modal="true"
+      className="create-dialog-backdrop"
+      role="dialog"
     >
-      <label>
-        Task title
-        <input name="title" required />
-      </label>
-      <label>
-        Project
-        <select name="projectId">
-          <option value="">No project</option>
-          {projects
-            .filter((project) => project.archivedAt === null)
-            .map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
+      <form
+        className="task-form create-popover create-dialog"
+        onSubmit={(event) => void submit(event)}
+      >
+        <h2>New task</h2>
+        <label>
+          Task title
+          <input name="title" required />
+        </label>
+        <label>
+          Project
+          <select
+            aria-label="Project"
+            name="projectId"
+            onChange={(event) => {
+              setSelectedProjectId(event.target.value);
+            }}
+            value={selectedProjectId}
+          >
+            <option value="">No project</option>
+            {projects
+              .filter((project) => project.archivedAt === null)
+              .map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+          </select>
+        </label>
+        <ClientField
+          clientNames={clientNames}
+          defaultValue={projects.find((project) => project.id === selectedProjectId)?.clientName}
+          disabled={selectedProjectId !== ""}
+        />
+        <label>
+          Stage
+          <select defaultValue={defaultWorkflowLane} name="workflowLane">
+            {WORKFLOW_LANES.map((lane) => (
+              <option key={lane} value={lane}>
+                {workflowLaneLabel(lane)}
               </option>
             ))}
-        </select>
-      </label>
-      <label>
-        Lane
-        <select defaultValue="inbox" name="workflowLane">
-          {WORKFLOW_LANES.map((lane) => (
-            <option key={lane} value={lane}>
-              {WORKFLOW_LANE_LABELS[lane]}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        Due date
-        <input name="dueDate" type="date" />
-      </label>
-      <label>
-        Value score (1–100)
-        <input max="100" min="1" name="businessValueScore" type="number" />
-      </label>
-      <label>
-        Value rationale
-        <textarea name="businessValueRationale" />
-      </label>
-      <label>
-        Value add
-        <textarea name="valueAdd" />
-      </label>
-      <div className="button-row">
-        <button type="submit">Create task</button>
-        <button
-          className="secondary"
-          onClick={() => {
-            setOpen(false);
-          }}
-          type="button"
-        >
-          Cancel
-        </button>
-      </div>
-    </form>
-  ) : (
-    <button
-      onClick={() => {
-        setOpen(true);
-      }}
-      type="button"
-    >
-      New task
-    </button>
+          </select>
+        </label>
+        <label>
+          Start date
+          <input name="startDate" type="date" />
+        </label>
+        <label>
+          Start time
+          <input name="startTime" type="time" />
+        </label>
+        <label>
+          End / due date
+          <input name="dueDate" type="date" />
+        </label>
+        <label>
+          End time
+          <input name="endTime" type="time" />
+        </label>
+        <label>
+          Allocated hours
+          <input
+            min="0"
+            name="allocatedHours"
+            onChange={(event) => {
+              setAllocatedHours(event.target.value === "" ? null : Number(event.target.value));
+            }}
+            step="0.25"
+            type="number"
+            value={allocatedHours ?? ""}
+          />
+        </label>
+        <label>
+          Task size
+          <select
+            aria-readonly="true"
+            onChange={() => undefined}
+            value={
+              allocatedHours === null
+                ? ""
+                : allocatedHours <= 0.5
+                  ? "small"
+                  : allocatedHours <= 1
+                    ? "medium"
+                    : allocatedHours <= 2
+                      ? "large"
+                      : "mega"
+            }
+          >
+            <option value="">Not set</option>
+            <option value="small">Small</option>
+            <option value="medium">Medium</option>
+            <option value="large">Large</option>
+            <option value="mega">Mega</option>
+          </select>
+        </label>
+        <label>
+          Priority level (1–5)
+          <select name="priorityLevel">
+            <option value="">Not set</option>
+            {[1, 2, 3, 4, 5].map((value) => (
+              <option key={value} value={value}>
+                {priorityLevelLabel(value)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Status
+          <select defaultValue="not_started" name="status">
+            {WORK_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {workStatusLabel(status)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Value score (1–100)
+          <input max="100" min="1" name="businessValueScore" type="number" />
+        </label>
+        <label>
+          Value rationale
+          <textarea name="businessValueRationale" />
+        </label>
+        <div className="button-row">
+          <button type="submit">Create task</button>
+          <button
+            className="secondary"
+            onClick={() => {
+              setOpen(false);
+            }}
+            type="button"
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
   );
 };
 
 const TaskBoard = ({
-  data,
+  clientNames,
+  condensed,
   onChanged,
-  setMessage,
-}: {
-  data: WorkspaceData;
-  onChanged: () => void;
-  setMessage: (value: string) => void;
-}) => (
-  <div className="task-board" aria-label="Global task Kanban">
-    {WORKFLOW_LANES.map((lane) => (
-      <section
-        className="task-lane"
-        key={lane}
-        aria-label={`Task lane: ${WORKFLOW_LANE_LABELS[lane]}`}
-      >
-        <h3 id={`lane-${lane}`}>{WORKFLOW_LANE_LABELS[lane]}</h3>
-        {data.tasks
-          .filter((task) => task.workflowLane === lane)
-          .map((task) => (
-            <TaskCard
-              key={task.id}
-              task={task}
-              projects={data.projects}
-              sort={data.sort}
-              onChanged={onChanged}
-              setMessage={setMessage}
-            />
-          ))}
-      </section>
-    ))}
-  </div>
-);
-
-const TaskCard = ({
-  onChanged,
+  onOpen,
+  onSelect,
   projects,
+  selected,
   setMessage,
-  sort,
-  task,
+  tasks,
+  updating,
 }: {
-  onChanged: () => void;
+  clientNames: string[];
+  condensed: boolean;
+  onChanged: () => Promise<void>;
+  onOpen: (task: Task) => void;
+  onSelect: (task: Task) => void;
   projects: Project[];
-  setMessage: (value: string) => void;
-  sort: KanbanSortMode;
-  task: Task;
+  selected: Selection;
+  setMessage: (message: string) => void;
+  tasks: Task[];
+  updating: boolean;
 }) => {
-  const [editing, setEditing] = useState(false);
-  const move = async (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
+  const draggedTaskId = useRef<string | null>(null);
+  const [collapsedLanes, setCollapsedLanes] = useState(
+    () => new Set<WorkflowLane>(["done", "cancelled"]),
+  );
+  const drop = async (event: DragEvent<HTMLElement>, workflowLane: WorkflowLane) => {
     event.preventDefault();
-    const lane = new FormData(event.currentTarget).get("lane");
+    const id = draggedTaskId.current ?? event.dataTransfer.getData("application/x-opsweave-task");
+    draggedTaskId.current = null;
+    const task = tasks.find((candidate) => candidate.id === id);
+    if (task === undefined || task.workflowLane === workflowLane) return;
     try {
-      await request(`/api/tasks/${task.id}/move`, "POST", {
+      await workspaceRequest(`/api/tasks/${task.id}/move`, "POST", {
         version: task.version,
-        workflowLane: lane,
+        workflowLane,
       });
-      onChanged();
+      await onChanged();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to move task.");
     }
   };
-  const reorder = async (direction: "earlier" | "later") => {
-    try {
-      await request(`/api/tasks/${task.id}/reorder`, "POST", { direction, version: task.version });
-      onChanged();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to reorder task.");
-    }
-  };
-  const save = async (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
-    event.preventDefault();
-    const values = new FormData(event.currentTarget);
-    const score = values.get("businessValueScore");
-    try {
-      await request(`/api/tasks/${task.id}`, "PUT", {
-        allocatedHours: task.allocatedHours,
-        businessValueRationale: optionalInput(values.get("businessValueRationale")),
-        businessValueScore: score === "" ? null : Number(score),
-        checklist: task.checklist.map(({ completed, label, position }) => ({
-          completed,
-          label,
-          position,
-        })),
-        definitionOfDone: task.definitionOfDone,
-        dueDate: optionalInput(values.get("dueDate")),
-        projectId: optionalInput(values.get("projectId")),
-        size: task.size,
-        title: values.get("title"),
-        valueAdd: task.valueAdd,
-        valueSource: score === "" ? null : "owner",
-        version: task.version,
-        workDescription: task.workDescription,
-        workflowLane: task.workflowLane,
-      });
-      setEditing(false);
-      onChanged();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to update task.");
-    }
-  };
-  if (editing)
-    return (
-      <form
-        className="task-card"
-        onSubmit={(event) => {
-          void save(event);
-        }}
-      >
-        <label>
-          Task title
-          <input defaultValue={task.title} name="title" required />
-        </label>
-        <label>
-          Project
-          <select defaultValue={task.projectId ?? ""} name="projectId">
-            <option value="">No project</option>
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Due date
-          <input defaultValue={task.dueDate ?? ""} name="dueDate" type="date" />
-        </label>
-        <label>
-          Value score
-          <input
-            defaultValue={task.businessValueScore ?? ""}
-            max="100"
-            min="1"
-            name="businessValueScore"
-            type="number"
-          />
-        </label>
-        <label>
-          Value rationale
-          <textarea
-            defaultValue={task.businessValueRationale ?? ""}
-            name="businessValueRationale"
-          />
-        </label>
-        <div className="button-row">
-          <button type="submit">Save task</button>
-          <button
-            className="secondary"
-            onClick={() => {
-              setEditing(false);
-            }}
-            type="button"
-          >
-            Cancel
-          </button>
-        </div>
-      </form>
-    );
   return (
-    <article className="task-card">
-      <h4>{task.title}</h4>
-      <p className={task.businessValueScore === null ? "value-unset" : "value-score"}>
-        {task.businessValueScore === null
-          ? "Value not set"
-          : `Value ${String(task.businessValueScore)}/100`}
-      </p>
-      {task.businessValueRationale ? <p>{task.businessValueRationale}</p> : null}
-      {task.dueDate ? <p>Due {task.dueDate}</p> : null}
-      <button
-        className="secondary"
-        onClick={() => {
-          setEditing(true);
-        }}
-        type="button"
-      >
-        Edit task
-      </button>
-      <form
-        className="move-form"
-        onSubmit={(event) => {
-          void move(event);
-        }}
-      >
-        <label>
-          Move to
-          <select defaultValue={task.workflowLane} name="lane">
-            {WORKFLOW_LANES.map((lane) => (
-              <option key={lane} value={lane}>
-                {WORKFLOW_LANE_LABELS[lane]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="submit">Move</button>
-      </form>
-      {sort === "manual" ? (
-        <div className="button-row">
-          <button className="secondary" onClick={() => void reorder("earlier")} type="button">
-            Move earlier
-          </button>
-          <button className="secondary" onClick={() => void reorder("later")} type="button">
-            Move later
-          </button>
-        </div>
-      ) : (
-        <p className="muted">Within-lane order is computed in {sortLabels[sort]} mode.</p>
-      )}
-    </article>
+    <div aria-busy={updating} className={updating ? "kanban-updating" : undefined}>
+      <KanbanBoard className="task-board" condensed={condensed} label="Global task Kanban">
+        {WORKFLOW_LANES.map((lane) => {
+          const laneTasks = tasks.filter((task) => task.workflowLane === lane);
+          const collapsed = collapsedLanes.has(lane);
+          return (
+            <section
+              aria-label={`Task lane: ${workflowLaneLabel(lane)}`}
+              className={`task-lane${collapsed ? " collapsed" : ""}`}
+              key={lane}
+              onDragOver={(event) => {
+                event.preventDefault();
+              }}
+              onDrop={(event) => void drop(event, lane)}
+            >
+              <div className="task-lane-heading">
+                <h3 className="kanban-stage-title">
+                  <button
+                    aria-expanded={!collapsed}
+                    className="kanban-column-heading"
+                    onClick={() => {
+                      setCollapsedLanes((current) => {
+                        const next = new Set(current);
+                        if (next.has(lane)) next.delete(lane);
+                        else next.add(lane);
+                        return next;
+                      });
+                    }}
+                    type="button"
+                  >
+                    <span>{workflowLaneLabel(lane)}</span>
+                  </button>
+                </h3>
+                <TaskForm
+                  clientNames={clientNames}
+                  defaultWorkflowLane={lane}
+                  onCreated={onChanged}
+                  projects={projects}
+                  setMessage={setMessage}
+                />
+                <button
+                  aria-expanded={!collapsed}
+                  className="kanban-column-count"
+                  onClick={() => {
+                    setCollapsedLanes((current) => {
+                      const next = new Set(current);
+                      if (next.has(lane)) next.delete(lane);
+                      else next.add(lane);
+                      return next;
+                    });
+                  }}
+                  type="button"
+                >
+                  {String(laneTasks.length)} {collapsed ? "▸" : "▾"}
+                </button>
+              </div>
+              {collapsed ? null : (
+                <div className="kanban-lane-content">
+                  {laneTasks.map((task) => (
+                    <TaskCard
+                      key={task.id}
+                      onOpen={onOpen}
+                      onSelect={onSelect}
+                      onDragStart={(taskId) => {
+                        draggedTaskId.current = taskId;
+                      }}
+                      selected={selected?.type === "task" && selected.id === task.id}
+                      task={task}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
+          );
+        })}
+      </KanbanBoard>
+    </div>
   );
 };
 
-const StageManager = ({
-  onChanged,
-  setMessage,
-  stages,
+const TaskCard = ({
+  onOpen,
+  onSelect,
+  onDragStart,
+  selected,
+  task,
 }: {
-  onChanged: () => void;
-  setMessage: (value: string) => void;
-  stages: Stage[];
+  onOpen: (task: Task) => void;
+  onSelect: (task: Task) => void;
+  onDragStart: (taskId: string) => void;
+  selected: boolean;
+  task: Task;
 }) => {
-  const [open, setOpen] = useState(false);
-  const submit = async (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
-    event.preventDefault();
-    const values = new FormData(event.currentTarget);
-    try {
-      await request("/api/project-stages", "POST", {
-        description: optionalInput(values.get("description")),
-        llmContext: optionalInput(values.get("llmContext")),
-        name: values.get("name"),
-        sequence: Number(values.get("sequence")),
-      });
-      event.currentTarget.reset();
-      setOpen(false);
-      onChanged();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to create stage.");
-    }
-  };
+  const deadline = taskDeadlineVisual(task);
   return (
-    <section className="workspace-section" aria-labelledby="stages-heading">
+    <div
+      aria-label={`Task: ${task.title}`}
+      aria-pressed={selected}
+      className={`task-card compact-card status-${task.status ?? "not_started"}${selected ? " selected" : ""}${deadline.overdue ? " overdue" : ""}`}
+      data-selectable-card
+      draggable
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelect(task);
+      }}
+      onDragStart={(event) => {
+        onDragStart(task.id);
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("application/x-opsweave-task", task.id);
+      }}
+      onDoubleClick={(event) => {
+        event.stopPropagation();
+        onOpen(task);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") onOpen(task);
+      }}
+      onMouseDown={(event) => {
+        if (event.detail >= 2) {
+          event.preventDefault();
+          event.stopPropagation();
+          onOpen(task);
+        }
+      }}
+      role="button"
+      style={
+        deadline.color === null
+          ? undefined
+          : ({ "--deadline-color": deadline.color } as CSSProperties)
+      }
+      tabIndex={0}
+    >
+      <h4>{task.title}</h4>
+      <dl className="task-card-facts">
+        <div>
+          <dt>Value</dt>
+          <dd>{task.businessValueScore ?? "—"}</dd>
+        </div>
+        <div>
+          <dt>Due</dt>
+          <dd>{task.dueDate ?? "—"}</dd>
+        </div>
+        <div>
+          <dt>Hours</dt>
+          <dd>{task.allocatedHours === null ? "—" : `${String(task.hoursLeft)}h left`}</dd>
+        </div>
+        <div>
+          <dt>Size</dt>
+          <dd>{task.size ?? "—"}</dd>
+        </div>
+        <div>
+          <dt>Priority</dt>
+          <dd>{priorityLevelLabel(task.priorityLevel)}</dd>
+        </div>
+        <div>
+          <dt>Status</dt>
+          <dd>{workStatusLabel(task.status ?? "not_started")}</dd>
+        </div>
+        <div>
+          <dt>Planning</dt>
+          <dd title={task.planningRationale ?? undefined}>
+            {task.planningScore === null ? "Not scored" : `${String(task.planningScore)}/100`}
+            {task.scheduleLocked ? " · Locked" : ""}
+          </dd>
+        </div>
+        <div>
+          <dt>Client</dt>
+          <dd>{task.clientName ?? "Personal"}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+};
+
+const DependencyMap = ({
+  data,
+  onOpenEntity,
+}: {
+  data: WorkspaceData;
+  onOpenEntity: (entity: { id: string; type: "project" | "task" }) => void;
+}) => {
+  const projects = data.projects.filter((project) => project.archivedAt === null);
+  const definition = dependencyMermaid(
+    data.tasks,
+    data.dependencies,
+    projects,
+    data.projectDependencies,
+    data.entityDependencies,
+  );
+  const entities = [
+    ...data.tasks.map((task, index) => ({
+      entityId: task.id,
+      entityType: "task" as const,
+      mermaidId: `task_${String(index)}`,
+    })),
+    ...projects.flatMap((project, index) => [
+      {
+        entityId: project.id,
+        entityType: "project" as const,
+        mermaidId: `project_${String(index)}`,
+      },
+      {
+        entityId: project.id,
+        entityType: "project" as const,
+        mermaidId: `group_${String(index)}`,
+      },
+    ]),
+  ];
+  return (
+    <section className="workspace-section" aria-labelledby="dependencies-heading">
       <div className="section-heading">
         <div>
-          <p className="eyebrow">Project configuration</p>
-          <h2 id="stages-heading">Project stages</h2>
+          <p className="eyebrow">Task graph</p>
+          <h2 id="dependencies-heading">Dependency map</h2>
         </div>
-        <button
-          className="secondary"
-          onClick={() => {
-            setOpen(!open);
-          }}
-          type="button"
-        >
-          {open ? "Close" : "Add stage"}
-        </button>
       </div>
-      {open ? (
-        <form
-          className="compact-form"
-          onSubmit={(event) => {
-            void submit(event);
+      <p className="muted">
+        Tasks are framed by project. Manage blockers inside a task or project record; pan, zoom, or
+        search this map to navigate.
+      </p>
+      <div className="diagram-panel">
+        <MermaidDiagram
+          definition={definition}
+          entities={entities}
+          onEntityOpen={({ entityId, entityType }) => {
+            onOpenEntity({ id: entityId, type: entityType });
           }}
-        >
-          <label>
-            Stage name
-            <input name="name" required />
-          </label>
-          <label>
-            Sequence
-            <input defaultValue={stages.length} min="0" name="sequence" type="number" />
-          </label>
-          <label>
-            Human description
-            <textarea name="description" />
-          </label>
-          <label>
-            LLM context
-            <textarea name="llmContext" />
-          </label>
-          <button type="submit">Create stage</button>
-        </form>
-      ) : null}
-      <div className="stage-list">
-        {stages.map((stage) => (
-          <StageRow key={stage.id} stage={stage} onChanged={onChanged} setMessage={setMessage} />
-        ))}
+        />
+        <details className="diagram-source">
+          <summary>Show Mermaid source</summary>
+          <textarea aria-label="Mermaid dependency source" readOnly value={definition} />
+        </details>
       </div>
     </section>
-  );
-};
-
-const StageRow = ({
-  onChanged,
-  setMessage,
-  stage,
-}: {
-  onChanged: () => void;
-  setMessage: (value: string) => void;
-  stage: Stage;
-}) => {
-  const [editing, setEditing] = useState(false);
-  const save = async (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
-    event.preventDefault();
-    const values = new FormData(event.currentTarget);
-    try {
-      await request(`/api/project-stages/${stage.id}`, "PUT", {
-        description: optionalInput(values.get("description")),
-        llmContext: optionalInput(values.get("llmContext")),
-        name: values.get("name"),
-        sequence: Number(values.get("sequence")),
-        version: stage.version,
-      });
-      setEditing(false);
-      onChanged();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to update stage.");
-    }
-  };
-  const archive = async () => {
-    try {
-      await request(`/api/project-stages/${stage.id}`, "DELETE");
-      onChanged();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to archive stage.");
-    }
-  };
-  if (editing)
-    return (
-      <form
-        className="compact-form"
-        onSubmit={(event) => {
-          void save(event);
-        }}
-      >
-        <label>
-          Name
-          <input defaultValue={stage.name} name="name" required />
-        </label>
-        <label>
-          Sequence
-          <input defaultValue={stage.sequence} min="0" name="sequence" type="number" />
-        </label>
-        <label>
-          Description
-          <textarea defaultValue={stage.description ?? ""} name="description" />
-        </label>
-        <label>
-          LLM context
-          <textarea defaultValue={stage.llmContext ?? ""} name="llmContext" />
-        </label>
-        <div className="button-row">
-          <button type="submit">Save stage</button>
-          <button
-            className="secondary"
-            onClick={() => {
-              setEditing(false);
-            }}
-            type="button"
-          >
-            Cancel
-          </button>
-        </div>
-      </form>
-    );
-  return (
-    <article className="project-card">
-      <strong>{stage.name}</strong>
-      <span className="muted">
-        {stage.archivedAt ? "Archived" : `Sequence ${String(stage.sequence)}`}
-      </span>
-      {stage.description ? <span>{stage.description}</span> : null}
-      {stage.archivedAt ? null : (
-        <div className="button-row">
-          <button
-            className="secondary"
-            onClick={() => {
-              setEditing(true);
-            }}
-            type="button"
-          >
-            Edit
-          </button>
-          <button className="secondary" onClick={() => void archive()} type="button">
-            Archive
-          </button>
-        </div>
-      )}
-    </article>
   );
 };

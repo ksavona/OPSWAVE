@@ -69,6 +69,108 @@ describe("planWeeklyWork", () => {
       availableHours: 0,
       enabled: false,
     }));
-    expect(planWeeklyWork([], [], days, settings, "2026-08-06").status).toBe("no_capacity");
+    expect(
+      planWeeklyWork(
+        [
+          {
+            allocatedHours: null,
+            businessValueScore: null,
+            dueDate: null,
+            id: "unplanned",
+            title: "Unplanned",
+            workflowLane: "inbox",
+          },
+        ],
+        [],
+        days,
+        settings,
+        "2026-08-06",
+      ),
+    ).toMatchObject({
+      excluded: [{ id: "unplanned", reason: "no_capacity" }],
+      status: "no_capacity",
+    });
+  });
+
+  it("uses owner-enabled value as a deterministic tie-breaker within equal deadlines", () => {
+    const oneHour = createDefaultWorkingDays().map((day, index) => ({
+      ...day,
+      availableHours: index === 0 ? 1 : 0,
+      enabled: index === 0,
+    }));
+    const result = planWeeklyWork(
+      [
+        {
+          allocatedHours: 1,
+          businessValueScore: null,
+          dueDate: "2026-08-06",
+          id: "c",
+          title: "Z",
+          workflowLane: "inbox",
+        },
+        {
+          allocatedHours: 1,
+          businessValueScore: 90,
+          dueDate: "2026-08-06",
+          id: "b",
+          title: "Same",
+          workflowLane: "inbox",
+        },
+        {
+          allocatedHours: 1,
+          businessValueScore: 90,
+          dueDate: "2026-08-06",
+          id: "a",
+          title: "Same",
+          workflowLane: "inbox",
+        },
+      ],
+      [],
+      oneHour,
+      { ...settings, businessValueInfluenceEnabled: true },
+      "2026-08-06",
+    );
+    expect(result.selected).toEqual([{ id: "a", reason: "deadline" }]);
+    expect(result.excluded).toEqual([
+      { id: "b", reason: "capacity" },
+      { id: "c", reason: "capacity" },
+    ]);
+  });
+
+  it("allows only the configured first-task overflow and defaults missing effort to one hour", () => {
+    const oneHour = createDefaultWorkingDays().map((day, index) => ({
+      ...day,
+      availableHours: index === 0 ? 1 : 0,
+      enabled: index === 0,
+    }));
+    expect(
+      planWeeklyWork(
+        [
+          {
+            allocatedHours: 2,
+            businessValueScore: null,
+            dueDate: null,
+            id: "large",
+            title: "Large",
+            workflowLane: "inbox",
+          },
+          {
+            allocatedHours: null,
+            businessValueScore: null,
+            dueDate: null,
+            id: "small",
+            title: "Small",
+            workflowLane: "inbox",
+          },
+        ],
+        [],
+        oneHour,
+        { ...settings, allowFinalTaskOverflow: true },
+        "2026-08-06",
+      ),
+    ).toMatchObject({
+      excluded: [{ id: "small", reason: "capacity" }],
+      selected: [{ id: "large", reason: "contextual" }],
+    });
   });
 });

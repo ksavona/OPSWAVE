@@ -5,22 +5,24 @@
 
 OpsWeave is an early-stage personal operations workspace intended to turn unstructured work into structured, reviewable projects and tasks. The project is a public example of disciplined AI engineering, operational design, governance, testing, and maintainable software delivery.
 
-> [!IMPORTANT]
-> Phase 4 adds owner-reviewed deterministic AI intake. Live AI providers, planning automation, reporting, and supported production deployment remain out of scope.
+> [!NOTE]
+> AI intake remains owner-reviewed. A live OpenAI provider is enabled only when the worker receives an environment-managed key; deterministic validation does not require external access.
 
 ## What exists
 
 - A pinned Node.js and pnpm TypeScript monorepo.
 - A private Next.js owner shell with server-side sessions and a non-sensitive health endpoint.
-- A durable PostgreSQL-backed worker that safely processes deterministic AI intake jobs.
+- A durable PostgreSQL-backed worker that safely processes deterministic or live OpenAI intake jobs.
 - A PostgreSQL 18.4 schema with owner, session, settings, encrypted credential, audit, and future workflow foundations.
 - Local-only owner bootstrap/recovery, Argon2id password hashing, revocable opaque sessions, and durable rate limits.
 - General, working-time, fake-provider credential, prioritisation, and security settings.
-- Project and task CRUD, configurable project stages, a project Kanban, and an eleven-lane global task board.
+- Compact project/task cards, full-screen record editors, configurable project stages, drag-and-drop Kanban boards, and a nine-lane global task board.
 - Server-authoritative manual, planning-priority, and greatest-value board ordering with optimistic conflict handling and audit events.
-- Derived project metrics, cycle-safe task dependencies, an accessible timeline, and safe Mermaid dependency export.
+- Derived project metrics, cycle-safe cross-type dependencies, allocated-hour Gantt views with exact calendar windows, per-record audit timelines, deadline risk styling, and an interactive grouped Mermaid dependency map.
 - Immutable intake source records, versioned extraction schema, source-span provenance, confidence, and explicit owner approval before proposed tasks reach Inbox.
-- AES-256-GCM credential persistence and a deterministic fake verification provider; no live provider adapter.
+- Duplicate intake surfacing, safe retry, 30-day decline-to-Trash restore, and an idempotent worker purge.
+- OpenAI structured extraction with current-work duplicate context and persistent owner-correction memory, plus deterministic offline validation.
+- Deterministic weekly planning previews plus trusted JSON metrics and formula-safe task CSV export.
 - Unit, component, route, migration, browser, accessibility, secret-leak, license, build, and dependency-audit checks.
 - One full validation command shared by local development and CI.
 
@@ -112,4 +114,6 @@ The presence of security primitives and tests is not a claim that the planned ap
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE).
+OpsWeave is licensed under the [Apache License 2.0](LICENSE) (`Apache-2.0`).
+
+You may download, use, modify, and redistribute OpsWeave, including in commercial products or services, provided that you comply with the license. Apache-2.0 does not require commercial users to contact the maintainer. Contact the maintainer separately for commercial partnerships, hosted offerings, support, or permission to use OpsWeave trademarks.

@@ -43,7 +43,7 @@ Start the worker to drain and poll the durable intake queue:
 pnpm dev:worker
 ```
 
-The worker requires `DATABASE_URL`. It uses the deterministic provider in this phase; no provider credential is read or logged by the worker.
+The worker requires `DATABASE_URL`. Without `OPENAI_API_KEY` it uses the deterministic provider; with the key it uses the live OpenAI structured-extraction adapter. The key is read only from the worker environment and is never logged.
 
 `pnpm owner:bootstrap` securely prompts for the only owner and refuses replay. It is deliberately local-only: there is no registration or setup route. Use `pnpm owner:recover` from the host if the owner password is lost; recovery preserves workspace data and revokes every session.
 

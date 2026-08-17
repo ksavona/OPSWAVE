@@ -8,7 +8,11 @@ import { SettingsService } from "../../server/settings-service";
 
 export default async function SettingsPage() {
   const session = await getCurrentSession();
-  const data = await new SettingsService(getStore()).read(session);
+  const store = getStore();
+  const [data, stages] = await Promise.all([
+    new SettingsService(store).read(session),
+    store.listProjectStages(session.workspaceId),
+  ]);
   const serializable = JSON.parse(JSON.stringify(data)) as Parameters<
     typeof SettingsWorkspace
   >[0]["initial"];
@@ -24,7 +28,14 @@ export default async function SettingsPage() {
           <LogoutButton />
         </nav>
       </header>
-      <SettingsWorkspace initial={serializable} />
+      <SettingsWorkspace
+        initial={serializable}
+        stages={
+          JSON.parse(JSON.stringify(stages)) as NonNullable<
+            Parameters<typeof SettingsWorkspace>[0]["stages"]
+          >
+        }
+      />
     </main>
   );
 }

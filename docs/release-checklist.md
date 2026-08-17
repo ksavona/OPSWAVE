@@ -16,7 +16,6 @@ This is a release-preparation checklist, not a production-readiness claim. Do no
 
 ## Current release blockers
 
-- Phase 4 intake retention/purge and duplicate workflows are incomplete.
 - Phase 5 durable automation, execution, schedules, undo, and recovery are incomplete.
 - Phase 6 dashboard UI, filters, charts, and print layout are incomplete.
 - A supported deployment, backup/restore test, and external security assessment have not been completed.

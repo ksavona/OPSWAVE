@@ -1,4 +1,4 @@
-import { SafeApplicationError, safeErrorResponse } from "@opsweave/domain";
+import { SafeApplicationError, entityIdSchema, safeErrorResponse } from "@opsweave/domain";
 
 import { AuthService } from "./auth-service";
 import { createRateLimitGate } from "./rate-limits";
@@ -15,6 +15,12 @@ import { IntakeService } from "./intake-service";
 import { PlanningService } from "./planning-service";
 import { ReportingService } from "./reporting-service";
 import { WorkService } from "./work-service";
+import {
+  MAX_ATTACHMENT_BYTES,
+  readAttachmentFile,
+  removeAttachmentFile,
+  saveAttachmentFile,
+} from "./attachment-storage";
 
 let authService: AuthService | undefined;
 let settingsService: SettingsService | undefined;
@@ -26,19 +32,25 @@ const auth = () => (authService ??= new AuthService(getStore(), createRateLimitG
 const settings = () => (settingsService ??= new SettingsService(getStore()));
 const work = () => (workService ??= new WorkService(getStore()));
 const intake = () => (intakeService ??= new IntakeService(getStore()));
-const planning = () => (planningService ??= new PlanningService(getStore()));
+const planning = () => (planningService ??= new PlanningService(getStore(), logger));
 const reporting = () => (reportingService ??= new ReportingService(getStore()));
 
 const json = (body: unknown, status = 200, headers?: HeadersInit) =>
   Response.json(body, { status, ...(headers === undefined ? {} : { headers }) });
 
-const body = async (request: Request): Promise<unknown> => {
+const DEFAULT_REQUEST_BODY_LIMIT = 16_384;
+const INTAKE_REQUEST_BODY_LIMIT = 1_000_000;
+
+const body = async (
+  request: Request,
+  maximumLength = DEFAULT_REQUEST_BODY_LIMIT,
+): Promise<unknown> => {
   const contentLength = Number(request.headers.get("content-length") ?? "0");
-  if (contentLength > 16_384) {
+  if (contentLength > maximumLength) {
     throw new SafeApplicationError("validation_error", "The request body is too large.", 413);
   }
   const text = await request.text();
-  if (text.length > 16_384) {
+  if (text.length > maximumLength) {
     throw new SafeApplicationError("validation_error", "The request body is too large.", 413);
   }
   try {
@@ -208,7 +220,10 @@ export const intakeHandler = (request: Request) =>
     const session = await requireSession(request);
     if (request.method === "GET") return json(await intake().list(session));
     assertSameOrigin(request);
-    return json(await intake().submit(session, await body(request)), 202);
+    return json(
+      await intake().submit(session, await body(request, INTAKE_REQUEST_BODY_LIMIT)),
+      202,
+    );
   });
 
 export const approveIntakeDraftHandler = (request: Request, draftId: string) =>
@@ -218,6 +233,13 @@ export const approveIntakeDraftHandler = (request: Request, draftId: string) =>
     return json({ approved: true });
   });
 
+export const updateIntakeDraftHandler = (request: Request, draftId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await intake().update(await requireSession(request), draftId, await body(request));
+    return json({ saved: true });
+  });
+
 export const declineIntakeDraftHandler = (request: Request, draftId: string) =>
   run(async () => {
     assertSameOrigin(request);
@@ -225,8 +247,38 @@ export const declineIntakeDraftHandler = (request: Request, draftId: string) =>
     return json({ declined: true });
   });
 
+export const restoreIntakeDraftHandler = (request: Request, draftId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await intake().restore(await requireSession(request), draftId);
+    return json({ restored: true });
+  });
+
+export const retryIntakeRunHandler = (request: Request, runId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await intake().retry(await requireSession(request), runId);
+    return json({ queued: true }, 202);
+  });
+
+export const retryFallbackIntakeDraftHandler = (request: Request, draftId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await intake().retryFallbackDraft(await requireSession(request), draftId);
+    return json({ queued: true }, 202);
+  });
+
 export const planningPreviewHandler = (request: Request) =>
-  run(async () => json(await planning().preview(await requireSession(request))));
+  run(async () => {
+    assertSameOrigin(request);
+    return json(await planning().preview(await requireSession(request)));
+  });
+
+export const planningRunHandler = (request: Request) =>
+  run(async () => {
+    assertSameOrigin(request);
+    return json(await planning().runManual(await requireSession(request), await body(request)));
+  });
 
 export const reportingHandler = (request: Request) =>
   run(async () => json(await reporting().report(await requireSession(request))));
@@ -257,6 +309,157 @@ export const updateProjectHandler = (request: Request, projectId: string) =>
     return json(
       await work().updateProject(await requireSession(request), projectId, await body(request)),
     );
+  });
+
+export const deleteProjectHandler = (request: Request, projectId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await work().deleteProject(await requireSession(request), projectId, await body(request));
+    return json({ deleted: true });
+  });
+
+export const attachmentsHandler = (
+  request: Request,
+  entityType: "project" | "task",
+  entityId: string,
+) =>
+  run(async () => {
+    const session = await requireSession(request);
+    const id = entityIdSchema.parse(entityId);
+    if (request.method === "GET")
+      return json(await getStore().listAttachments(session.workspaceId, entityType, id));
+    assertSameOrigin(request);
+    const contentLength = Number(request.headers.get("content-length") ?? "0");
+    if (contentLength > MAX_ATTACHMENT_BYTES + 1_000_000)
+      throw new SafeApplicationError(
+        "validation_error",
+        "The attachment is larger than 25 MB.",
+        413,
+      );
+    const submitted = await request.formData();
+    const file = submitted.get("file");
+    if (!(file instanceof File))
+      throw new SafeApplicationError("validation_error", "Choose a document to upload.", 400);
+    if (file.size <= 0 || file.size > MAX_ATTACHMENT_BYTES)
+      throw new SafeApplicationError(
+        "validation_error",
+        "Attachments must be between 1 byte and 25 MB.",
+        413,
+      );
+    const originalName = file.name.split(/[\\/]/u).at(-1)?.trim().slice(0, 500) ?? "document";
+    let storageKey: string | undefined;
+    try {
+      storageKey = await saveAttachmentFile(file);
+      return json(
+        await getStore().addAttachment(session.workspaceId, session.ownerId, {
+          byteSize: file.size,
+          contentType: file.type.trim().slice(0, 255) || "application/octet-stream",
+          entityId: id,
+          entityType,
+          originalName,
+          storageKey,
+        }),
+        201,
+      );
+    } catch (error) {
+      if (storageKey !== undefined) await removeAttachmentFile(storageKey);
+      throw error;
+    }
+  });
+
+export const attachmentHandler = (request: Request, attachmentId: string) =>
+  run(async () => {
+    const session = await requireSession(request);
+    const id = entityIdSchema.parse(attachmentId);
+    const attachment = await getStore().getAttachment(session.workspaceId, id);
+    if (attachment === null)
+      throw new SafeApplicationError("validation_error", "Attachment not found.", 404);
+    if (request.method === "GET") {
+      const bytes = await readAttachmentFile(attachment.storageKey);
+      const encodedName = encodeURIComponent(attachment.originalName).replaceAll("'", "%27");
+      const inline =
+        new URL(request.url).searchParams.get("inline") === "1" &&
+        ["image/gif", "image/jpeg", "image/png", "image/webp"].includes(attachment.contentType);
+      return new Response(new Uint8Array(bytes), {
+        headers: {
+          "content-disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodedName}`,
+          "content-length": String(bytes.byteLength),
+          "content-type": attachment.contentType,
+          "x-content-type-options": "nosniff",
+        },
+      });
+    }
+    assertSameOrigin(request);
+    const removed = await getStore().deleteAttachment(session.workspaceId, session.ownerId, id);
+    await removeAttachmentFile(removed.storageKey);
+    return json({ deleted: true });
+  });
+
+export const entityAuditHandler = (
+  request: Request,
+  entityType: "project" | "task",
+  entityId: string,
+) => run(async () => json(await work().audit(await requireSession(request), entityType, entityId)));
+
+export const createEntityDependencyHandler = (
+  request: Request,
+  dependentType: "project" | "task",
+  dependentId: string,
+) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await work().createEntityDependency(
+      await requireSession(request),
+      dependentType,
+      dependentId,
+      await body(request),
+    );
+    return json({ created: true }, 201);
+  });
+
+export const removeEntityDependencyHandler = (
+  request: Request,
+  dependentType: "project" | "task",
+  dependentId: string,
+  blockerType: "project" | "task",
+  blockerId: string,
+) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await work().removeEntityDependency(
+      await requireSession(request),
+      dependentType,
+      dependentId,
+      blockerType,
+      blockerId,
+    );
+    return json({ removed: true });
+  });
+
+export const createProjectDependencyHandler = (request: Request, projectId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await work().createProjectDependency(
+      await requireSession(request),
+      projectId,
+      await body(request),
+    );
+    return json({ created: true }, 201);
+  });
+
+export const removeProjectDependencyHandler = (
+  request: Request,
+  projectId: string,
+  dependsOnProjectId: string,
+) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await work().removeProjectDependency(
+      await requireSession(request),
+      projectId,
+      dependsOnProjectId,
+    );
+    return json({ removed: true });
   });
 
 export const createProjectStageHandler = (request: Request) =>
@@ -291,6 +494,49 @@ export const updateTaskHandler = (request: Request, taskId: string) =>
     assertSameOrigin(request);
     return json(
       await work().updateTask(await requireSession(request), taskId, await body(request)),
+    );
+  });
+
+export const moveTaskScheduleHandler = (request: Request, taskId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await work().moveTaskSchedule(await requireSession(request), taskId, await body(request));
+    return json({ moved: true });
+  });
+
+export const moveProjectScheduleHandler = (request: Request, projectId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await work().moveProjectSchedule(await requireSession(request), projectId, await body(request));
+    return json({ moved: true });
+  });
+
+export const deleteTaskHandler = (request: Request, taskId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    await work().deleteTask(await requireSession(request), taskId, await body(request));
+    return json({ deleted: true });
+  });
+
+export const taskTimeEntriesHandler = (request: Request, taskId: string) =>
+  run(async () => {
+    const session = await requireSession(request);
+    if (request.method === "GET") return json(await work().listTaskTimeEntries(session, taskId));
+    assertSameOrigin(request);
+    return json(await work().addTaskTimeEntry(session, taskId, await body(request)), 201);
+  });
+
+export const deleteTaskTimeEntryHandler = (request: Request, taskId: string, entryId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    return json(await work().deleteTaskTimeEntry(await requireSession(request), taskId, entryId));
+  });
+
+export const splitMegaTaskHandler = (request: Request, taskId: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    return json(
+      await work().splitMegaTask(await requireSession(request), taskId, await body(request)),
     );
   });
 

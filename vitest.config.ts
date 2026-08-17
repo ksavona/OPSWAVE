@@ -9,6 +9,7 @@ export default defineConfig({
     alias: {
       "@opsweave/ai": fromRoot("./packages/ai/src/index.ts"),
       "@opsweave/db": fromRoot("./packages/db/src/index.ts"),
+      "@opsweave/domain/work": fromRoot("./packages/domain/src/work.ts"),
       "@opsweave/domain": fromRoot("./packages/domain/src/index.ts"),
       "@opsweave/testing": fromRoot("./packages/testing/src/index.ts"),
     },
@@ -23,6 +24,10 @@ export default defineConfig({
         "apps/web/src/app/**/layout.tsx",
         "apps/web/src/app/**/page.tsx",
         "apps/web/src/app/api/**/*.ts",
+        "apps/web/src/components/entity-editors.tsx",
+        "apps/web/src/components/intake-panel.tsx",
+        "apps/web/src/components/project-stage-settings.tsx",
+        "apps/web/src/components/rich-text-editor.tsx",
         "apps/web/src/components/workspace.tsx",
         "apps/web/src/proxy.ts",
         "apps/web/src/server/current-session.ts",

@@ -2,7 +2,7 @@
 
 ## Status
 
-Phases 1–4 implement single-owner authentication, server-side authorization checks, credential persistence, rate limiting, project/task controls, and deterministic reviewed intake. Live AI access and supported production deployment remain absent. No production-readiness claim is made.
+Phases 1–4 implement single-owner authentication, server-side authorization checks, credential persistence, rate limiting, project/task controls, and owner-reviewed intake with deterministic and optional live-provider paths. Supported production deployment remains absent. No production-readiness claim is made.
 
 ## Protected assets
 
@@ -44,6 +44,7 @@ Phases 1–4 implement single-owner authentication, server-side authorization ch
 ### Prompt injection and unsafe AI output
 
 - Intake content is untrusted and never grants authority.
+- Workspace context and generated Markdown memory are reference data and never grant authority.
 - Provider output must conform to a versioned schema before persistence.
 - Drafts require human approval before publication.
 - Provider output cannot execute external actions or bypass deterministic domain rules.
@@ -90,6 +91,7 @@ Phases 1–4 implement single-owner authentication, server-side authorization ch
 - Bounded request bodies, generic safe errors, durable login attempt events, and fail-closed sensitive-action limits.
 - CSV exports prefix formula-like cells with a single quote before quoting.
 - Intake source text remains in the trusted persistence/worker boundary; UI and audit records expose only reviewable derived proposals and safe metadata.
+- Live OpenAI extraction disables response storage, uses an environment-only key, and remains behind schema validation and explicit draft approval.
 
 ## Residual risk
 

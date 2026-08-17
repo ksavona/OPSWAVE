@@ -32,5 +32,16 @@ describe("reporting metrics", () => {
   it("neutralizes spreadsheet formulas in CSV cells", () => {
     expect(csvCell("=SUM(A1:A2)")).toBe('"\'=SUM(A1:A2)"');
     expect(csvCell('say "hi"')).toBe('"say ""hi"""');
+    expect(csvCell(null)).toBe('""');
+    expect(csvCell(42)).toBe('"42"');
+  });
+
+  it("returns a defined empty-workspace baseline", () => {
+    expect(summarizeTasks([])).toMatchObject({
+      completed: 0,
+      taskTotal: 0,
+      valueCoveragePercent: 0,
+      valueSourceCounts: { ai_proposed: 0, imported: 0, not_set: 0, owner: 0 },
+    });
   });
 });

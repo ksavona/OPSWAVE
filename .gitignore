@@ -53,6 +53,7 @@ test-results/
 *.log
 pnpm-debug.log*
 logs/
+storage/
 tmp/
 temp/
 

@@ -30,6 +30,7 @@ export default defineConfig({
       AUTH_RATE_LIMIT_PEPPER: "synthetic-browser-rate-limit-pepper-32-characters",
       DATABASE_URL: testDatabaseUrl,
       NEXT_TELEMETRY_DISABLED: "1",
+      OPENAI_API_KEY: "",
       TRUST_PROXY: "false",
     },
     reuseExistingServer: false,

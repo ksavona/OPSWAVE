@@ -2,7 +2,11 @@
 
 import { useEffect, useMemo, useState, type SyntheticEvent } from "react";
 
-type Section = "general" | "working-time" | "ai" | "prioritization" | "security";
+import { ProjectStageSettings } from "./project-stage-settings";
+import { automationRunMessage } from "./workspace-api";
+import type { Stage } from "./workspace-types";
+
+type Section = "general" | "working-time" | "projects" | "ai" | "prioritization" | "security";
 type SaveState = "idle" | "unsaved" | "saving" | "saved" | "conflict" | "error";
 
 interface SettingsData {
@@ -14,10 +18,12 @@ interface SettingsData {
   };
   general: {
     dateDisplay: "iso" | "locale";
-    defaultKanbanSort: "greatest_value" | "manual" | "planning_priority";
+    defaultKanbanSort: "dependency" | "greatest_value" | "manual" | "planning_priority";
     defaultLandingView: "projects";
     displayName: string;
     firstDayOfWeek: "monday";
+    fullName?: string | null;
+    knownAs?: string[];
     timezone: string;
     version: number;
   };
@@ -37,12 +43,19 @@ interface SettingsData {
     version: number;
     weeklyAutomationEnabled: boolean;
   };
-  workingDays: { availableHours: number; enabled: boolean; weekday: string }[];
+  workingDays: {
+    availableHours: number;
+    endTime?: string;
+    enabled: boolean;
+    startTime?: string;
+    weekday: string;
+  }[];
 }
 
 const sections: [Section, string][] = [
   ["general", "General"],
   ["working-time", "Working Time"],
+  ["projects", "Projects"],
   ["ai", "AI"],
   ["prioritization", "Prioritisation"],
   ["security", "Security"],
@@ -80,7 +93,24 @@ const FormStatus = ({ state, message }: { message: string; state: SaveState }) =
   </p>
 );
 
-export const SettingsWorkspace = ({ initial }: { initial: SettingsData }) => {
+const workdayHours = (startTime: string, endTime: string): number => {
+  const [startHour = 0, startMinute = 0] = startTime.split(":").map(Number);
+  const [endHour = 0, endMinute = 0] = endTime.split(":").map(Number);
+  return Math.max(
+    0,
+    Math.round(((endHour * 60 + endMinute - startHour * 60 - startMinute) / 60) * 100) / 100,
+  );
+};
+
+const nullableOwnerName = (value: string): string | null => (value.length === 0 ? null : value);
+
+export const SettingsWorkspace = ({
+  initial,
+  stages = [],
+}: {
+  initial: SettingsData;
+  stages?: Stage[];
+}) => {
   const [active, setActive] = useState<Section>("general");
   const [data, setData] = useState(initial);
   const [state, setState] = useState<SaveState>("idle");
@@ -147,17 +177,21 @@ export const SettingsWorkspace = ({ initial }: { initial: SettingsData }) => {
             onSave={save}
           />
         ) : null}
+        {active === "projects" ? <ProjectStageSettings initial={stages} /> : null}
         {active === "ai" ? (
           <AiSection data={data} onChange={setData} setMessage={setMessage} setState={setState} />
         ) : null}
         {active === "prioritization" ? (
           <PrioritizationSection
             data={data}
+            hasUnsavedChanges={state === "unsaved"}
             onChange={setData}
             onDirty={() => {
               setState("unsaved");
             }}
             onSave={save}
+            setMessage={setMessage}
+            setState={setState}
           />
         ) : null}
         {active === "security" ? (
@@ -183,7 +217,11 @@ const GeneralSection = ({
   <form
     onSubmit={(event) => {
       event.preventDefault();
-      void onSave("/api/settings/general", data.general);
+      void onSave("/api/settings/general", {
+        ...data.general,
+        fullName: data.general.fullName ?? null,
+        knownAs: data.general.knownAs ?? [],
+      });
     }}
   >
     <h2>General</h2>
@@ -197,6 +235,43 @@ const GeneralSection = ({
       }}
       value={data.general.displayName}
     />
+    <label htmlFor="owner-full-name">Your full name</label>
+    <input
+      id="owner-full-name"
+      maxLength={200}
+      onChange={(event) => {
+        onChange({
+          ...data,
+          general: { ...data.general, fullName: nullableOwnerName(event.target.value) },
+        });
+        onDirty();
+      }}
+      placeholder="For example, Alexandra Simões"
+      value={data.general.fullName ?? ""}
+    />
+    <label htmlFor="owner-known-as">People also call you</label>
+    <input
+      id="owner-known-as"
+      onChange={(event) => {
+        onChange({
+          ...data,
+          general: {
+            ...data.general,
+            knownAs: event.target.value
+              .split(",")
+              .map((name) => name.trim())
+              .filter((name) => name.length > 0)
+              .slice(0, 20),
+          },
+        });
+        onDirty();
+      }}
+      placeholder="For example, Alex, Lex"
+      value={(data.general.knownAs ?? []).join(", ")}
+    />
+    <p className="muted">
+      Used only to identify your action items and other participants in meeting transcripts.
+    </p>
     <label htmlFor="timezone">IANA timezone</label>
     <input
       id="timezone"
@@ -252,8 +327,14 @@ const WorkingTimeSection = ({
       }}
     >
       <h2>Working Time</h2>
-      <p>Set available decimal hours independently. Disabled days contribute zero.</p>
+      <p>Set each day’s work window. Available hours are calculated automatically.</p>
       <div className="weekday-grid">
+        <div className="weekday-row weekday-heading" aria-hidden="true">
+          <span>Day</span>
+          <span>Start</span>
+          <span>End</span>
+          <span>Hours</span>
+        </div>
         {data.workingDays.map((day, index) => (
           <div className="weekday-row" key={day.weekday}>
             <label>
@@ -261,7 +342,13 @@ const WorkingTimeSection = ({
                 checked={day.enabled}
                 onChange={(event) => {
                   const days = [...data.workingDays];
-                  days.splice(index, 1, { ...day, enabled: event.target.checked });
+                  days.splice(index, 1, {
+                    ...day,
+                    availableHours: event.target.checked
+                      ? workdayHours(day.startTime ?? "09:00", day.endTime ?? "17:00")
+                      : 0,
+                    enabled: event.target.checked,
+                  });
                   onChange({ ...data, workingDays: days });
                   onDirty();
                 }}
@@ -270,20 +357,42 @@ const WorkingTimeSection = ({
               {day.weekday}
             </label>
             <input
-              aria-label={`${day.weekday} available hours`}
+              aria-label={`${day.weekday} start time`}
               disabled={!day.enabled}
-              max="24"
-              min="0"
               onChange={(event) => {
                 const days = [...data.workingDays];
-                days.splice(index, 1, { ...day, availableHours: Number(event.target.value) });
+                const startTime = event.target.value;
+                days.splice(index, 1, {
+                  ...day,
+                  availableHours: workdayHours(startTime, day.endTime ?? "17:00"),
+                  startTime,
+                });
                 onChange({ ...data, workingDays: days });
                 onDirty();
               }}
-              step="0.25"
-              type="number"
-              value={day.availableHours}
+              type="time"
+              value={day.startTime ?? "09:00"}
             />
+            <input
+              aria-label={`${day.weekday} end time`}
+              disabled={!day.enabled}
+              onChange={(event) => {
+                const days = [...data.workingDays];
+                const endTime = event.target.value;
+                days.splice(index, 1, {
+                  ...day,
+                  availableHours: workdayHours(day.startTime ?? "09:00", endTime),
+                  endTime,
+                });
+                onChange({ ...data, workingDays: days });
+                onDirty();
+              }}
+              type="time"
+              value={day.endTime ?? "17:00"}
+            />
+            <output aria-label={`${day.weekday} available hours`} className="calculated-hours">
+              {day.enabled ? `${String(day.availableHours)}h` : "—"}
+            </output>
           </div>
         ))}
       </div>
@@ -416,18 +525,46 @@ const AiSection = ({
 
 const PrioritizationSection = ({
   data,
+  hasUnsavedChanges,
   onChange,
   onDirty,
   onSave,
+  setMessage,
+  setState,
 }: {
   data: SettingsData;
+  hasUnsavedChanges: boolean;
   onChange: (value: SettingsData) => void;
   onDirty: () => void;
   onSave: (url: string, value: unknown) => Promise<Record<string, unknown> | null>;
+  setMessage: (value: string) => void;
+  setState: (value: SaveState) => void;
 }) => {
+  const [automationRunning, setAutomationRunning] = useState<"daily" | "weekly" | null>(null);
   const update = (key: keyof SettingsData["prioritization"], value: number | boolean) => {
     onChange({ ...data, prioritization: { ...data.prioritization, [key]: value } });
     onDirty();
+  };
+  const runAutomation = async (kind: "daily" | "weekly") => {
+    if (
+      kind === "weekly" &&
+      !window.confirm(
+        "Run weekly planning now? Unlocked incomplete Today and This Week tasks will be re-prioritised.",
+      )
+    )
+      return;
+    setAutomationRunning(kind);
+    setState("idle");
+    setMessage(`${kind === "weekly" ? "Weekly" : "Daily"} planning is running…`);
+    try {
+      const result = await request("/api/planning/run", "POST", { kind });
+      setMessage(automationRunMessage(result, kind));
+    } catch (error) {
+      setState("error");
+      setMessage(error instanceof Error ? error.message : "Unable to run planning.");
+    } finally {
+      setAutomationRunning(null);
+    }
   };
   return (
     <form
@@ -521,6 +658,39 @@ const PrioritizationSection = ({
         </label>
       ))}
       <button type="submit">Save Prioritisation</button>
+      <section aria-labelledby="manual-automation-heading" className="settings-automation">
+        <h3 id="manual-automation-heading">Run an automation now</h3>
+        <p>
+          Run planning immediately using the last saved working-time and prioritisation settings.
+        </p>
+        <div className="button-row">
+          <button
+            disabled={automationRunning !== null || hasUnsavedChanges}
+            onClick={() => void runAutomation("daily")}
+            type="button"
+          >
+            {automationRunning === "daily" ? "Running daily planning…" : "Run daily planning now"}
+          </button>
+          <button
+            className="secondary"
+            disabled={automationRunning !== null || hasUnsavedChanges}
+            onClick={() => void runAutomation("weekly")}
+            type="button"
+          >
+            {automationRunning === "weekly"
+              ? "Running weekly planning…"
+              : "Run weekly planning now"}
+          </button>
+        </div>
+        {automationRunning === null ? null : (
+          <p aria-live="assertive" className="automation-progress" role="status">
+            {data.ai.configured ? "Waiting for LLM response…" : "Running deterministic planning…"}
+          </p>
+        )}
+        {hasUnsavedChanges ? (
+          <p className="interaction-hint">Save your prioritisation changes before running.</p>
+        ) : null}
+      </section>
     </form>
   );
 };

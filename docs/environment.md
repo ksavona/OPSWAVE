@@ -2,22 +2,24 @@
 
 Copy `.env.example` to `.env`. The local file is ignored and the repository validation rejects tracked `.env` variants other than `.env.example`.
 
-| Variable                              |                   Required | Secret | Purpose                                                                  |
-| ------------------------------------- | -------------------------: | -----: | ------------------------------------------------------------------------ |
-| `APP_BASE_URL`                        |                Development |     No | Canonical local web URL                                                  |
-| `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` |                   Optional |     No | Use an existing Chromium binary locally                                  |
-| `NEXT_TELEMETRY_DISABLED`             |                Recommended |     No | Disable framework telemetry in project commands                          |
-| `TRUST_PROXY`                         |                   Optional |     No | Trust validated forwarded client IPs only behind a configured proxy      |
-| `AUTH_RATE_LIMIT_PEPPER`              |                    Runtime |    Yes | HMAC pepper for privacy-reduced account/network limiter keys             |
-| `POSTGRES_DB`                         |                Development |     No | Local database name                                                      |
-| `POSTGRES_USER`                       |                Development |     No | Local database role                                                      |
-| `POSTGRES_PASSWORD`                   |                Development |    Yes | Local database password                                                  |
-| `DATABASE_URL`                        |         Migrations/runtime |    Yes | PostgreSQL connection string                                             |
-| `TEST_DATABASE_URL`                   |          Integration tests |    Yes | Isolated loopback test database on port `55432`                          |
-| `OPENAI_API_KEY`                      |                   Optional |    Yes | Read-only environment-managed credential status; no live adapter yet     |
-| `OPENAI_DEFAULT_MODEL`                |       Future live provider |     No | Configurable provider model; current documented default is `gpt-5.6-sol` |
-| `AI_CREDENTIAL_MASTER_KEY`            | Settings credential writes |    Yes | Base64-encoded 32-byte authenticated-encryption key                      |
-| `AI_CREDENTIAL_MASTER_KEY_VERSION`    | Settings credential writes |     No | Positive envelope key version                                            |
+| Variable                              |                   Required | Secret | Purpose                                                             |
+| ------------------------------------- | -------------------------: | -----: | ------------------------------------------------------------------- |
+| `APP_BASE_URL`                        |                Development |     No | Canonical local web URL                                             |
+| `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` |                   Optional |     No | Use an existing Chromium binary locally                             |
+| `NEXT_TELEMETRY_DISABLED`             |                Recommended |     No | Disable framework telemetry in project commands                     |
+| `TRUST_PROXY`                         |                   Optional |     No | Trust validated forwarded client IPs only behind a configured proxy |
+| `AUTH_RATE_LIMIT_PEPPER`              |                    Runtime |    Yes | HMAC pepper for privacy-reduced account/network limiter keys        |
+| `POSTGRES_DB`                         |                Development |     No | Local database name                                                 |
+| `POSTGRES_USER`                       |                Development |     No | Local database role                                                 |
+| `OPSWEAVE_POSTGRES_PORT`              |                   Optional |     No | Loopback host port for local PostgreSQL; defaults to `5432`         |
+| `POSTGRES_PASSWORD`                   |                Development |    Yes | Local database password                                             |
+| `DATABASE_URL`                        |         Migrations/runtime |    Yes | PostgreSQL connection string                                        |
+| `TEST_DATABASE_URL`                   |          Integration tests |    Yes | Isolated loopback test database on port `55432`                     |
+| `OPENAI_API_KEY`                      |                   Optional |    Yes | Enables the live OpenAI intake adapter in the trusted worker        |
+| `OPENAI_DEFAULT_MODEL`                |     Live intake extraction |     No | Configurable provider model; deployment default is `gpt-5.6-sol`    |
+| `OPSWAVE_MEMORY_DIR`                  |                   Optional |     No | Private generated owner-learning Markdown directory                 |
+| `AI_CREDENTIAL_MASTER_KEY`            | Settings credential writes |    Yes | Base64-encoded 32-byte authenticated-encryption key                 |
+| `AI_CREDENTIAL_MASTER_KEY_VERSION`    | Settings credential writes |     No | Positive envelope key version                                       |
 
 ## Secret rules
 

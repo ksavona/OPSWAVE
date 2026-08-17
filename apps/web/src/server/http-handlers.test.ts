@@ -5,13 +5,17 @@ import type { AuthService } from "./auth-service";
 import {
   configureHttpServicesForTests,
   generalSettingsHandler,
+  intakeHandler,
   loginHandler,
   logoutHandler,
+  planningPreviewHandler,
   resetHttpServicesForTests,
   sessionHandler,
 } from "./http-handlers";
 import { SESSION_COOKIE_NAME } from "./request-security";
 import type { SettingsService } from "./settings-service";
+import type { IntakeService } from "./intake-service";
+import type { PlanningService } from "./planning-service";
 
 const session = {
   createdAt: new Date("2026-08-04T12:00:00.000Z"),
@@ -100,5 +104,47 @@ describe("HTTP authentication and settings contracts", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ saved: true, version: 2 });
     expect(settings.updateGeneral).toHaveBeenCalledWith(session, { version: 1 });
+  });
+
+  it("accepts the documented large intake payload through the intake-specific bound", async () => {
+    const { auth } = configure();
+    const intake = { submit: vi.fn(async () => ({ id: "run" })) };
+    configureHttpServicesForTests({
+      auth: auth as unknown as AuthService,
+      intake: intake as unknown as IntakeService,
+    });
+    const content = "x".repeat(100_000);
+    const response = await intakeHandler(
+      request(
+        "/api/intake",
+        "POST",
+        { content, sourceType: "instruction" },
+        "valid-token-long-enough-for-authentication",
+      ),
+    );
+    expect(response.status).toBe(202);
+    expect(intake.submit).toHaveBeenCalledWith(session, { content, sourceType: "instruction" });
+  });
+
+  it("protects the state-recording planning preview as a same-origin mutation", async () => {
+    const { auth } = configure();
+    const planning = { preview: vi.fn(async () => ({ runId: "run" })) };
+    configureHttpServicesForTests({
+      auth: auth as unknown as AuthService,
+      planning: planning as unknown as PlanningService,
+    });
+    const response = await planningPreviewHandler(
+      request("/api/planning/preview", "POST", {}, "valid-token-long-enough-for-authentication"),
+    );
+    expect(response.status).toBe(200);
+    expect(planning.preview).toHaveBeenCalledWith(session);
+    const crossOrigin = request(
+      "/api/planning/preview",
+      "POST",
+      {},
+      "valid-token-long-enough-for-authentication",
+    );
+    crossOrigin.headers.set("origin", "https://attacker.invalid");
+    expect((await planningPreviewHandler(crossOrigin)).status).toBe(403);
   });
 });

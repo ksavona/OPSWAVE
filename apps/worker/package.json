@@ -5,6 +5,12 @@
   "description": "Background worker foundation for OpsWeave.",
   "license": "Apache-2.0",
   "type": "module",
+  "exports": {
+    "./automation": {
+      "types": "./dist/automation-scheduler.d.ts",
+      "default": "./dist/automation-scheduler.js"
+    }
+  },
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
     "dev": "tsx watch src/main.ts",

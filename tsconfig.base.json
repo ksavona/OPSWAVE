@@ -18,8 +18,10 @@
     "paths": {
       "@opsweave/ai": ["./packages/ai/src/index.ts"],
       "@opsweave/db": ["./packages/db/src/index.ts"],
+      "@opsweave/domain/work": ["./packages/domain/src/work.ts"],
       "@opsweave/domain": ["./packages/domain/src/index.ts"],
-      "@opsweave/testing": ["./packages/testing/src/index.ts"]
+      "@opsweave/testing": ["./packages/testing/src/index.ts"],
+      "@opsweave/worker/automation": ["./apps/worker/src/automation-scheduler.ts"]
     },
     "resolveJsonModule": true,
     "rewriteRelativeImportExtensions": true,

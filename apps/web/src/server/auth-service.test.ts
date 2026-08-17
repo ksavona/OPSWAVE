@@ -89,12 +89,20 @@ describe("AuthService", () => {
   });
 
   it("uses the same generic response for wrong and nonexistent credentials", async () => {
-    const first = createHarness().service.login("synthetic-owner", "wrong password", "client");
-    const second = createHarness().service.login("nonexistent-owner", "wrong password", "client");
-    await expect(first).rejects.toMatchObject({ code: "invalid_credentials", status: 401 });
-    await expect(second).rejects.toMatchObject({ code: "invalid_credentials", status: 401 });
-    await expect(first).rejects.toThrow("username or password is invalid");
-    await expect(second).rejects.toThrow("username or password is invalid");
+    const results = await Promise.allSettled([
+      createHarness().service.login("synthetic-owner", "wrong password", "client"),
+      createHarness().service.login("nonexistent-owner", "wrong password", "client"),
+    ]);
+    for (const result of results) {
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") {
+        const reason: unknown = result.reason;
+        expect(reason).toMatchObject({ code: "invalid_credentials", status: 401 });
+        expect(reason).toBeInstanceOf(Error);
+        if (!(reason instanceof Error)) throw new Error("Expected a rejected Error.");
+        expect(reason.message).toContain("username or password is invalid");
+      }
+    }
   });
 
   it("returns bounded retry metadata when a login limiter rejects", async () => {

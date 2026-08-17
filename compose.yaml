@@ -17,7 +17,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-opsweave}
     healthcheck: *postgres-healthcheck
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${OPSWEAVE_POSTGRES_PORT:-5432}:5432"
     restart: unless-stopped
     volumes:
       - opsweave-postgres:/var/lib/postgresql

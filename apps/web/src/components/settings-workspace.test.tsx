@@ -19,6 +19,8 @@ const initial = {
     defaultLandingView: "projects" as const,
     displayName: "Synthetic workspace",
     firstDayOfWeek: "monday" as const,
+    fullName: null,
+    knownAs: [],
     timezone: "UTC",
     version: 1,
   },
@@ -49,9 +51,10 @@ describe("SettingsWorkspace", () => {
     vi.restoreAllMocks();
   });
 
-  it("provides five sections and calculates raw/effective weekly capacity", async () => {
+  it("provides six sections and calculates raw/effective weekly capacity", async () => {
     render(<SettingsWorkspace initial={initial} />);
     expect(screen.getByRole("navigation", { name: "Settings sections" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Projects" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Working Time" }));
     expect(screen.getByText("40.00h")).toBeInTheDocument();
     expect(screen.getByText("36.00h")).toBeInTheDocument();
@@ -98,6 +101,8 @@ describe("SettingsWorkspace", () => {
     await user.clear(screen.getByLabelText("Workspace name"));
     await user.type(screen.getByLabelText("Workspace name"), "Updated workspace");
     await user.selectOptions(screen.getByLabelText("Date display"), "locale");
+    await user.type(screen.getByLabelText("Your full name"), "Alexandra Simões");
+    await user.type(screen.getByLabelText("People also call you"), "Alex, Sandra");
     expect(screen.getByText("Unsaved changes.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save General settings" }));
     expect(await screen.findByText("Saved.")).toBeInTheDocument();
@@ -116,9 +121,12 @@ describe("SettingsWorkspace", () => {
     const user = userEvent.setup();
     render(<SettingsWorkspace initial={initial} />);
     await user.click(screen.getByRole("button", { name: "Working Time" }));
+    await user.clear(screen.getByLabelText("monday start time"));
+    await user.type(screen.getByLabelText("monday start time"), "08:00");
+    await user.clear(screen.getByLabelText("monday end time"));
+    await user.type(screen.getByLabelText("monday end time"), "14:30");
     const mondayHours = screen.getByLabelText("monday available hours");
-    await user.clear(mondayHours);
-    await user.type(mondayHours, "6.5");
+    expect(mondayHours).toHaveTextContent("6.5h");
     await user.click(screen.getByRole("button", { name: "Save Working Time" }));
     expect(await screen.findByText("Saved.")).toBeInTheDocument();
 
@@ -130,6 +138,97 @@ describe("SettingsWorkspace", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("runs daily and weekly planning manually from Prioritisation settings", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_url, request) => {
+      const body = request?.body;
+      if (typeof body !== "string") throw new Error("Expected a JSON request body.");
+      const kind = JSON.parse(body) as { kind: "daily" | "weekly" };
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            completed: true,
+            result:
+              kind.kind === "daily"
+                ? {
+                    candidateCount: 0,
+                    llmUsed: false,
+                    selectedCount: 0,
+                    skippedReasonCounts: { blocked: 97, requires_breakdown: 1 },
+                  }
+                : {
+                    candidateCount: 4,
+                    llmUsed: true,
+                    selectedCount: 2,
+                    skippedReasonCounts: { blocked: 3 },
+                  },
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<SettingsWorkspace initial={initial} />);
+    await user.click(screen.getByRole("button", { name: "Prioritisation" }));
+
+    await user.click(screen.getByRole("button", { name: "Run daily planning now" }));
+    expect(
+      await screen.findByText(/The LLM was not called because there were no eligible candidates/u),
+    ).toHaveTextContent("97 blocked by unfinished dependencies");
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/planning/run",
+      expect.objectContaining({ body: JSON.stringify({ kind: "daily" }), method: "POST" }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Run weekly planning now" }));
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(await screen.findByText(/2 tasks were moved to This Week/u)).toHaveTextContent(
+      "The LLM ranked 4 eligible tasks",
+    );
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/planning/run",
+      expect.objectContaining({ body: JSON.stringify({ kind: "weekly" }), method: "POST" }),
+    );
+  });
+
+  it("shows when a manual run is waiting for an LLM response", async () => {
+    let resolveRequest: ((response: Response) => void) | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveRequest = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(
+      <SettingsWorkspace
+        initial={{
+          ...initial,
+          ai: { ...initial.ai, configured: true, provider: "openai", source: "environment" },
+        }}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Prioritisation" }));
+    await user.click(screen.getByRole("button", { name: "Run daily planning now" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Waiting for LLM response…");
+    resolveRequest?.(
+      new Response(JSON.stringify({ completed: true, result: null }), { status: 200 }),
+    );
+    expect(await screen.findByText("Daily planning completed.")).toBeInTheDocument();
+  });
+
+  it("requires prioritisation settings to be saved before a manual run", async () => {
+    render(<SettingsWorkspace initial={initial} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Prioritisation" }));
+    await user.clear(screen.getByLabelText("Planning buffer (%)"));
+    await user.type(screen.getByLabelText("Planning buffer (%)"), "15");
+
+    expect(screen.getByRole("button", { name: "Run daily planning now" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Run weekly planning now" })).toBeDisabled();
+    expect(screen.getByText("Save your prioritisation changes before running.")).toBeVisible();
   });
 
   it("adds, tests, and removes a settings-managed credential without retaining plaintext", async () => {

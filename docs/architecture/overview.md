@@ -9,7 +9,7 @@ OpsWeave is a Phase 4 modular monolith. It has single-owner authentication, prot
 | Module             | Current responsibility                           | May depend on                  |
 | ------------------ | ------------------------------------------------ | ------------------------------ |
 | `apps/web`         | Next.js UI and server boundary                   | Domain, database, AI packages  |
-| `apps/worker`      | Structured worker process and future jobs        | Domain, database, AI packages  |
+| `apps/worker`      | Durable intake, retention, and planning jobs     | Domain, database, AI packages  |
 | `packages/domain`  | Framework-independent rules and security helpers | Small reviewed primitives only |
 | `packages/db`      | PostgreSQL schema, connections, and migrations   | Drizzle and PostgreSQL driver  |
 | `packages/ai`      | Provider contract and credential vault           | Node platform cryptography     |
@@ -33,10 +33,12 @@ A TLS-terminating reverse proxy is outside the repository foundation. The web an
 2. Login verifies Argon2id credentials, applies durable privacy-reduced rate limits, and returns an opaque cookie while PostgreSQL stores only its digest.
 3. Every protected page and endpoint validates the database session. Mutations also validate origin and optimistic settings versions.
 4. Settings persist general preferences, seven working-day rows, prioritisation policy, and an optional AES-256-GCM credential envelope.
-5. Provider verification uses only a deterministic fake. The browser receives status, never credential plaintext.
+5. Settings credential verification uses a deterministic fake. The browser receives status, never credential plaintext. Live intake reads its OpenAI key only from the worker environment.
 6. An authenticated owner submits an intake source. The web process stores it with a fingerprint and queues a PostgreSQL-backed run without writing source text to audit metadata.
-7. The worker claims one queued run with `FOR UPDATE SKIP LOCKED`, validates deterministic provider output against the versioned intake schema, and stores a review-required draft. Source text stays within the worker boundary.
+7. The worker claims one queued run with `FOR UPDATE SKIP LOCKED`, retrieves bounded current-work and owner-learning context, calls OpenAI when configured (or the deterministic provider otherwise), validates structured output against the versioned intake schema, and stores a review-required draft. Source text stays within the worker boundary.
 8. Only explicit owner approval creates AI-proposed Inbox tasks; decline is audited. AI output never publishes directly to the board.
+9. Exact normalized duplicates are surfaced without merging. Declined drafts enter 30-day Trash, can be restored to review before expiry, and are purged idempotently by the worker.
+10. The worker evaluates each workspace in its configured timezone and applies daily/weekly Kanban automations through unique, transactional planning runs. OpenAI ranks candidates when configured; deterministic policy and database constraints remain authoritative.
 
 ## Trust boundaries
 
@@ -63,4 +65,4 @@ packages/* must not depend on apps/*
 
 ## Unimplemented boundaries
 
-Delegated access, schedules, live providers, intake retry/restore/purge controls, audit browsing, exercised backups, and production containers remain planned.
+Delegated access and production containers remain planned.

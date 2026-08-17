@@ -26,19 +26,34 @@ const timezoneSchema = z
 
 export const generalSettingsSchema = z.object({
   dateDisplay: z.enum(["iso", "locale"]),
-  defaultKanbanSort: z.enum(["manual", "planning_priority", "greatest_value"]),
+  defaultKanbanSort: z.enum(["manual", "planning_priority", "greatest_value", "dependency"]),
   defaultLandingView: z.enum(["projects"]),
   displayName: z.string().trim().min(1).max(100),
   firstDayOfWeek: z.literal("monday"),
+  fullName: z.string().trim().min(1).max(200).nullable().default(null),
+  knownAs: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
   timezone: timezoneSchema,
   version: z.number().int().positive(),
 });
 
-export const workingDaySchema = z.object({
-  availableHours: z.number().min(0).max(24),
-  enabled: z.boolean(),
-  weekday: z.enum(WEEKDAYS),
-});
+export const workingDaySchema = z
+  .object({
+    availableHours: z.number().min(0).max(24),
+    endTime: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/u)
+      .default("17:00"),
+    enabled: z.boolean(),
+    startTime: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/u)
+      .default("09:00"),
+    weekday: z.enum(WEEKDAYS),
+  })
+  .refine((day) => !day.enabled || day.startTime < day.endTime, {
+    message: "Working-day end time must be after its start time.",
+    path: ["endTime"],
+  });
 
 export const workingTimeSettingsSchema = z.object({
   days: z
@@ -105,6 +120,8 @@ export const calculateWeeklyCapacity = (
 export const createDefaultWorkingDays = (): WorkingDayInput[] =>
   WEEKDAYS.map((weekday, index) => ({
     availableHours: index < 5 ? 8 : 0,
+    endTime: "17:00",
     enabled: index < 5,
+    startTime: "09:00",
     weekday,
   }));
