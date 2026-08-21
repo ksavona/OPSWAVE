@@ -12,6 +12,7 @@ export default defineConfig({
       "@opsweave/domain/work": fromRoot("./packages/domain/src/work.ts"),
       "@opsweave/domain": fromRoot("./packages/domain/src/index.ts"),
       "@opsweave/testing": fromRoot("./packages/testing/src/index.ts"),
+      "@opsweave/worker/automation": fromRoot("./apps/worker/src/automation-scheduler.ts"),
     },
   },
   test: {
