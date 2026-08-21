@@ -3,6 +3,8 @@
 /AGENTS.md
 /agent.md
 /agents.md
+/apps/web/AGENTS.md
+/apps/web/CLAUDE.md
 /Notes.md
 /notes.md
 /Implementation/
@@ -36,6 +38,9 @@ out/
 coverage/
 .nyc_output/
 .turbo/
+playwright-report/
+test-results/
+.cache/
 *.tsbuildinfo
 
 # Runtime data
@@ -46,7 +51,9 @@ coverage/
 *.pid
 *.seed
 *.log
+pnpm-debug.log*
 logs/
+storage/
 tmp/
 temp/
 

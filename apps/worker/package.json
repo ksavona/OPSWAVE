@@ -1,0 +1,26 @@
+{
+  "name": "@opsweave/worker",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Background worker foundation for OpsWeave.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    "./automation": {
+      "types": "./dist/automation-scheduler.d.ts",
+      "default": "./dist/automation-scheduler.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@opsweave/ai": "workspace:*",
+    "@opsweave/db": "workspace:*",
+    "@opsweave/domain": "workspace:*",
+    "pino": "10.3.1"
+  }
+}

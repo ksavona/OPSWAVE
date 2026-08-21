@@ -1,0 +1,16 @@
+.next/
+coverage/
+dist/
+node_modules/
+playwright-report/
+test-results/
+pnpm-lock.yaml
+
+# Private local planning material
+AGENT.md
+AGENTS.md
+Notes.md
+Implementation/
+Implementations/
+implementation/
+implementations/

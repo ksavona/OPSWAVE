@@ -1,0 +1,2 @@
+ALTER TABLE "opsweave"."task_checklist_items" ADD COLUMN "version" integer DEFAULT 1 NOT NULL;--> statement-breakpoint
+ALTER TABLE "opsweave"."task_checklist_items" ADD CONSTRAINT "task_checklist_items_version_positive" CHECK ("opsweave"."task_checklist_items"."version" > 0);

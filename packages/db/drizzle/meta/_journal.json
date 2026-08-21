@@ -1,0 +1,146 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1785841139943,
+      "tag": "20260804105859_lush_warstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785844380594,
+      "tag": "20260804115300_pink_ghost_rider",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785913766874,
+      "tag": "20260805070926_unknown_captain_britain",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785916843447,
+      "tag": "20260805080043_quick_ultimo",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786008800407,
+      "tag": "20260806093320_melted_thanos",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786435491517,
+      "tag": "20260811080451_ordinary_mordo",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786444960055,
+      "tag": "20260811104240_unknown_mongoose",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786455239666,
+      "tag": "20260811133359_famous_dracula",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786474759588,
+      "tag": "20260811185919_fair_guardian",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786517587192,
+      "tag": "20260812065307_special_kree",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786685900940,
+      "tag": "20260814053820_stale_la_nuit",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786694698697,
+      "tag": "20260814080458_boring_nuke",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786701132046,
+      "tag": "20260814095212_magical_blob",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786960543089,
+      "tag": "20260817095543_early_shotgun",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1786960559218,
+      "tag": "20260817095559_jazzy_blob",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1786970272932,
+      "tag": "20260817123752_uneven_galactus",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1786970346833,
+      "tag": "20260817123906_sour_sir_ram",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1786973656554,
+      "tag": "20260817133416_bright_maggott",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786975421559,
+      "tag": "20260817140341_spicy_nextwave",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1787291504191,
+      "tag": "20260821055144_cheerful_power_pack",
+      "breakpoints": true
+    }
+  ]
+}

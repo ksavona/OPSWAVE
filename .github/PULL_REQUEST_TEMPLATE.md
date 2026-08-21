@@ -1,4 +1,4 @@
-## Summary
+# Summary
 
 <!-- What changed? Keep this concise and specific. -->
 
@@ -16,7 +16,7 @@ Closes #
 
 <!-- List exact commands and results. Use "Not run" with a reason when appropriate. -->
 
-- [ ] `./scripts/check-repository.sh`
+- [ ] `pnpm validate`
 
 ## Security and privacy
 

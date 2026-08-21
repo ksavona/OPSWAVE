@@ -1,78 +1,119 @@
 # OpsWeave
 
+[![Full validation](https://github.com/ksavona/OPSWAVE/actions/workflows/ci.yml/badge.svg)](https://github.com/ksavona/OPSWAVE/actions/workflows/ci.yml)
 [![Repository hygiene](https://github.com/ksavona/OPSWAVE/actions/workflows/repository-hygiene.yml/badge.svg)](https://github.com/ksavona/OPSWAVE/actions/workflows/repository-hygiene.yml)
 
-OpsWeave is an early-stage personal operations workspace intended to turn unstructured work into structured, reviewable projects and tasks. The project is being developed as a public example of disciplined AI engineering, operational design, governance, testing, and maintainable software delivery.
+OpsWeave is an early-stage personal operations workspace intended to turn unstructured work into structured, reviewable projects and tasks. The project is a public example of disciplined AI engineering, operational design, governance, testing, and maintainable software delivery.
 
-> [!IMPORTANT]
-> OpsWeave is in pre-implementation planning. There is no runnable application or release yet. Capabilities described below are a product direction, not implemented features.
+> [!NOTE]
+> AI intake remains owner-reviewed. A live OpenAI provider is enabled only when the worker receives an environment-managed key; deterministic validation does not require external access.
 
-## Product direction
+## What exists
 
-OpsWeave is intended to provide:
+- A pinned Node.js and pnpm TypeScript monorepo.
+- A private Next.js owner shell with server-side sessions and a non-sensitive health endpoint.
+- A durable PostgreSQL-backed worker that safely processes deterministic or live OpenAI intake jobs.
+- A PostgreSQL 18.4 schema with owner, session, settings, encrypted credential, audit, and future workflow foundations.
+- Local-only owner bootstrap/recovery, Argon2id password hashing, revocable opaque sessions, and durable rate limits.
+- General, working-time, fake-provider credential, prioritisation, and security settings.
+- Compact project/task cards, full-screen record editors, configurable project stages, drag-and-drop Kanban boards, and a nine-lane global task board.
+- Server-authoritative manual, planning-priority, and greatest-value board ordering with optimistic conflict handling and audit events.
+- Derived project metrics, cycle-safe cross-type dependencies, allocated-hour Gantt views with exact calendar windows, per-record audit timelines, deadline risk styling, and an interactive grouped Mermaid dependency map.
+- Immutable intake source records, versioned extraction schema, source-span provenance, confidence, and explicit owner approval before proposed tasks reach Inbox.
+- Duplicate intake surfacing, safe retry, 30-day decline-to-Trash restore, and an idempotent worker purge.
+- OpenAI structured extraction with current-work duplicate context and persistent owner-correction memory, plus deterministic offline validation.
+- Deterministic weekly planning previews plus trusted JSON metrics and formula-safe task CSV export.
+- Unit, component, route, migration, browser, accessibility, secret-leak, license, build, and dependency-audit checks.
+- One full validation command shared by local development and CI.
 
-- governed intake of operational notes, messages, and instructions;
-- human review before AI-generated proposals become live work;
-- project and task views for planning, dependencies, progress, and capacity;
-- deterministic prioritisation and scheduling when AI is unavailable;
-- explicit auditability, privacy boundaries, and safe handling of credentials; and
-- a single-owner, self-hostable operating model.
+Live AI access is disabled by default and is not required by development, tests, or CI.
 
-The initial architecture, technology choices, data model, and security controls will be recorded as public architecture decisions before application features are implemented.
-
-## Repository status
-
-| Area | Status |
-|---|---|
-| Application source | Not implemented |
-| Runtime and package manager | Not selected |
-| Automated application tests | Not available |
-| Deployment | Not available |
-| Public repository governance | Established |
-| Repository hygiene validation | Available |
-
-## Repository layout
+## Architecture
 
 ```text
-.
-├── .github/              # GitHub workflows and contribution templates
-├── docs/                 # Public architecture and decision records
-├── scripts/              # Repository-level validation utilities
-├── CHANGELOG.md
-├── CONTRIBUTING.md
-├── README.md
-└── SECURITY.md
+apps/web       Private owner UI and protected server boundary
+apps/worker    Durable PostgreSQL-backed intake extraction worker
+packages/ai    Provider and encrypted-credential boundaries
+packages/db    PostgreSQL schema, migrations, and connection factory
+packages/domain
+               Shared business and security rules
+packages/testing
+               Deterministic synthetic fixtures
 ```
 
-## Getting started
+The repository is a modular monolith. PostgreSQL is the planned system of record, and external AI providers remain replaceable. See the [architecture overview](docs/architecture/overview.md) and [decision index](docs/decisions/README.md).
 
-There is no application to install yet. To inspect the repository and run its current hygiene validation:
+## Prerequisites
+
+- Node.js `24.19.0` (see `.node-version` or `.nvmrc`)
+- pnpm `11.20.0` through Corepack
+- Docker Engine with Docker Compose v2
+
+## Local setup
 
 ```bash
-git clone https://github.com/ksavona/OPSWAVE.git
-cd OPSWAVE
-./scripts/check-repository.sh
+corepack enable
+corepack prepare pnpm@11.20.0 --activate
+cp .env.example .env
+pnpm install --frozen-lockfile
+pnpm exec playwright install --with-deps chromium
+docker compose up --detach --wait postgres
+pnpm db:migrate
+pnpm owner:bootstrap
+pnpm dev
 ```
 
-This script validates the public repository structure and prevents private local planning material from being tracked. It is not an application build, test, security audit, or coverage command.
+Before starting PostgreSQL, replace the example database password in `.env` and update `DATABASE_URL` to match. Generate an AI credential master key only when credential storage is exercised. A live `OPENAI_API_KEY` is optional and must remain in the ignored `.env` file or the deployment secret store.
+
+The sign-in page is available at `http://localhost:3000/login`; the health endpoint is `/health`. Bootstrap runs once and has no HTTP equivalent. See [authentication and owner access](docs/authentication.md).
+
+## Full validation
+
+```bash
+pnpm validate
+```
+
+The command starts an isolated PostgreSQL test container, runs every repository quality gate, and removes the test database unless `OPSWAVE_KEEP_TEST_DATABASE=true` is set. It covers:
+
+- repository hygiene and high-confidence secret scanning;
+- formatting, Markdown, ESLint, and strict TypeScript checks;
+- unit/component/route tests with line and branch coverage thresholds;
+- migration tests against PostgreSQL 18.4;
+- production builds and browser accessibility smoke tests;
+- production dependency license review; and
+- a high-severity production dependency audit.
+
+The HTML coverage report is written to `coverage/index.html`. See [testing and validation](docs/testing.md) for focused commands and environment controls.
 
 ## Documentation
 
 - [Documentation index](docs/README.md)
-- [Architecture status](docs/architecture/README.md)
-- [Architecture decision records](docs/decisions/README.md)
+- [Architecture overview](docs/architecture/overview.md)
+- [Development guide](docs/development.md)
+- [Environment configuration](docs/environment.md)
+- [Authentication and owner access](docs/authentication.md)
+- [Settings](docs/settings.md)
+- [Projects and tasks](docs/projects-and-tasks.md)
+- [AI intake](docs/intake.md)
+- [Reporting](docs/reporting.md)
+- [Release checklist](docs/release-checklist.md)
+- [Security and threat model](docs/security.md)
+- [Testing and validation](docs/testing.md)
+- [Deployment assumptions](docs/deployment.md)
+- [Backup and recovery](docs/recovery.md)
+- [Synthetic data policy](docs/synthetic-data.md)
 - [Contributing guide](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 
-## Contributing
-
-The project is not yet accepting feature implementation without a public issue that defines its scope and acceptance criteria. Documentation, repository-quality, and design feedback are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
-
 ## Security
 
-Do not report suspected vulnerabilities in a public issue. Follow the private process in [SECURITY.md](SECURITY.md).
+Treat intake content, AI output, imported data, and configuration as untrusted. Never commit credentials or production data. Do not report suspected vulnerabilities in a public issue; follow [SECURITY.md](SECURITY.md).
+
+The presence of security primitives and tests is not a claim that the planned application is secure or production-ready.
 
 ## License
 
-No open-source license has been selected yet. Until a license is added, the repository is publicly viewable but its contents are not licensed for reuse, modification, or distribution. A license will be selected before application source is published.
+OpsWeave is licensed under the [Apache License 2.0](LICENSE) (`Apache-2.0`).
+
+You may download, use, modify, and redistribute OpsWeave, including in commercial products or services, provided that you comply with the license. Apache-2.0 does not require commercial users to contact the maintainer. Contact the maintainer separately for commercial partnerships, hosted offerings, support, or permission to use OpsWeave trademarks.

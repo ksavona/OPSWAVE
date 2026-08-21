@@ -1,0 +1,13 @@
+DROP INDEX "opsweave"."access_grants_live_subject_email_idx";--> statement-breakpoint
+DROP INDEX "opsweave"."delegation_aliases_user_context_idx";--> statement-breakpoint
+DROP INDEX "opsweave"."delegation_aliases_alias_context_idx";--> statement-breakpoint
+DROP INDEX "opsweave"."protected_terms_context_value_idx";--> statement-breakpoint
+ALTER TABLE "opsweave"."attachments" ADD CONSTRAINT "attachments_original_attachment_id_fk" FOREIGN KEY ("original_attachment_id") REFERENCES "opsweave"."attachments"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "access_grants_live_project_email_idx" ON "opsweave"."access_grants" USING btree ("workspace_id","subject_project_id","normalized_delegate_email") WHERE "opsweave"."access_grants"."subject_type"='project' and "opsweave"."access_grants"."status" in ('invite_pending','active');--> statement-breakpoint
+CREATE UNIQUE INDEX "access_grants_live_task_email_idx" ON "opsweave"."access_grants" USING btree ("workspace_id","subject_task_id","normalized_delegate_email") WHERE "opsweave"."access_grants"."subject_type"='task' and "opsweave"."access_grants"."status" in ('invite_pending','active');--> statement-breakpoint
+CREATE UNIQUE INDEX "delegation_aliases_project_user_idx" ON "opsweave"."delegation_aliases" USING btree ("context_project_id","user_id") WHERE "opsweave"."delegation_aliases"."context_type"='project';--> statement-breakpoint
+CREATE UNIQUE INDEX "delegation_aliases_task_user_idx" ON "opsweave"."delegation_aliases" USING btree ("context_task_id","user_id") WHERE "opsweave"."delegation_aliases"."context_type"='task';--> statement-breakpoint
+CREATE UNIQUE INDEX "delegation_aliases_project_alias_idx" ON "opsweave"."delegation_aliases" USING btree ("context_project_id","alias") WHERE "opsweave"."delegation_aliases"."context_type"='project';--> statement-breakpoint
+CREATE UNIQUE INDEX "delegation_aliases_task_alias_idx" ON "opsweave"."delegation_aliases" USING btree ("context_task_id","alias") WHERE "opsweave"."delegation_aliases"."context_type"='task';--> statement-breakpoint
+CREATE UNIQUE INDEX "protected_terms_project_value_idx" ON "opsweave"."protected_terms" USING btree ("workspace_id","context_project_id","normalized_value") WHERE "opsweave"."protected_terms"."context_project_id" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX "protected_terms_task_value_idx" ON "opsweave"."protected_terms" USING btree ("workspace_id","context_task_id","normalized_value") WHERE "opsweave"."protected_terms"."context_task_id" is not null;

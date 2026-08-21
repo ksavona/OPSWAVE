@@ -1,0 +1,32 @@
+{
+  "name": "@opsweave/web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "OpsWeave web application foundation.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev",
+    "start": "next start --hostname 127.0.0.1 --port 3000",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@opsweave/ai": "workspace:*",
+    "@opsweave/db": "workspace:*",
+    "@opsweave/domain": "workspace:*",
+    "@opsweave/worker": "workspace:*",
+    "@tiptap/extension-image": "3.30.0",
+    "@tiptap/extension-table": "3.17.1",
+    "@tiptap/extension-task-item": "3.30.0",
+    "@tiptap/extension-task-list": "3.30.0",
+    "@tiptap/react": "3.30.0",
+    "@tiptap/starter-kit": "3.30.0",
+    "mermaid": "11.16.1",
+    "next": "16.3.0",
+    "pino": "10.3.1",
+    "rate-limiter-flexible": "11.2.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  }
+}

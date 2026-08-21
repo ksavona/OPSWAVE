@@ -1,6 +1,6 @@
 # Contributing to OpsWeave
 
-Thank you for helping improve OpsWeave. The repository is currently in pre-implementation planning, so contributions should focus on clearly scoped, reviewable improvements supported by public repository evidence.
+Thank you for helping improve OpsWeave. The repository currently contains the Phase 0 engineering foundation; product workflows remain unimplemented. Contributions must be clearly scoped, reviewable, and supported by public repository evidence.
 
 ## Before contributing
 
@@ -29,15 +29,15 @@ ci: add repository hygiene check
 
 Avoid mixing feature work, refactoring, formatting, and unrelated documentation changes in one pull request.
 
-## Current validation
+## Setup and validation
 
-The only current automated check validates repository hygiene:
+Follow [docs/development.md](docs/development.md) for the pinned toolchain and local setup. Run the complete quality gate before opening a pull request:
 
 ```bash
-./scripts/check-repository.sh
+pnpm validate
 ```
 
-It does not test application behavior or produce code coverage because no application exists yet. Application build, format, lint, type-check, test, coverage, and security-audit commands must be documented only after the relevant tooling is implemented and verified.
+This command runs repository/secret checks, formatting, Markdown and code linting, strict type-checking, coverage, PostgreSQL migration tests, production builds, browser/accessibility smoke tests, license review, and the production dependency audit. Report the exact result and review `coverage/index.html` when executable code changes.
 
 ## Pull request expectations
 
@@ -63,7 +63,13 @@ Mark unrun or unavailable checks honestly. Do not describe planned capabilities 
 
 ## Code standards
 
-Language- and framework-specific standards are not defined because the application stack has not been selected. When implementation begins, the repository must add and document reproducible formatting, linting, type-checking, testing, coverage, build, and dependency-management rules.
+- Use the pinned Node.js, pnpm, TypeScript, PostgreSQL, and framework versions.
+- Keep application-to-package dependency direction described in the architecture overview.
+- Use strict TypeScript; do not bypass checks with `any`, broad assertions, or disabled rules without a documented reason.
+- Generate and review database migrations; never edit an applied migration.
+- Keep provider-specific code behind `packages/ai` and database access behind `packages/db`.
+- Use deterministic fakes for external services in required tests.
+- Update the full validation command when executable paths, test scope, commands, or dependencies change.
 
 ## Review and conduct
 

@@ -1,19 +1,40 @@
 # Documentation
 
-This directory contains durable public documentation for OpsWeave. Documents must describe repository evidence accurately and clearly label proposed decisions or planned behavior.
+This directory contains durable public documentation for OpsWeave. Documents describe repository evidence and label planned behavior explicitly.
 
-## Index
+## Engineering guides
 
-- [Architecture status](architecture/README.md) — current system state and provisional boundaries.
-- [Architecture decision records](decisions/README.md) — how consequential technical decisions will be recorded.
-- [ADR template](decisions/0000-template.md) — required structure for new decisions.
+- [Architecture overview](architecture/overview.md)
+- [Development guide](development.md)
+- [Environment configuration](environment.md)
+- [Authentication and owner access](authentication.md)
+- [Delegation and collaboration](collaboration.md)
+- [Settings](settings.md)
+- [AI intake](intake.md)
+- [Reporting](reporting.md)
+- [Release checklist](release-checklist.md)
+- [Testing and validation](testing.md)
+- [Security and threat model](security.md)
+- [Deployment assumptions](deployment.md)
+- [Backup and recovery](recovery.md)
+- [Synthetic data policy](synthetic-data.md)
 
-Future implementation should add focused documentation for setup, configuration, architecture and data flow, testing and coverage, APIs, security and privacy, deployment, backup and recovery, and operations as those capabilities become real.
+## Decisions
+
+- [Architecture decision records](decisions/README.md)
+- [ADR template](decisions/0000-template.md)
+
+## Repository policies
+
+- [Contributing guide](../CONTRIBUTING.md)
+- [Security reporting](../SECURITY.md)
+- [Code of conduct](../CODE_OF_CONDUCT.md)
+- [Changelog](../CHANGELOG.md)
 
 ## Documentation rules
 
-- Do not claim a feature exists until its implementation and validation are present.
-- Use verified commands only.
+- Do not claim a feature exists until implementation and validation are present.
+- Use verified, copyable commands only.
 - Keep examples synthetic and free of credentials or identifying data.
-- Update documentation in the same change as the behavior it describes.
+- Update documentation in the same change as behavior.
 - Preserve accepted architecture decisions; supersede them with a new record instead of rewriting history.

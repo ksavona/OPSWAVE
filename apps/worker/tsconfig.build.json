@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": true,
+    "declarationMap": true,
+    "noEmit": false,
+    "outDir": "dist",
+    "paths": {
+      "@opsweave/ai": ["../../packages/ai/dist/index.d.ts"],
+      "@opsweave/db": ["../../packages/db/dist/index.d.ts"],
+      "@opsweave/domain": ["../../packages/domain/dist/index.d.ts"]
+    },
+    "rootDir": "src",
+    "sourceMap": true
+  },
+  "exclude": ["src/**/*.test.ts"]
+}
