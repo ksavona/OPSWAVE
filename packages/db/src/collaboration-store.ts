@@ -94,6 +94,7 @@ export interface DelegateStageRecord {
 
 export interface DelegateTaskRecord {
   readonly accessRole: AccessRole;
+  readonly assigned: boolean;
   readonly alias: string | null;
   readonly allocatedHours: number | null;
   readonly definitionOfDone: string | null;
@@ -129,6 +130,20 @@ export interface DelegateProjectRecord {
   readonly id: string;
   readonly name: string;
   readonly notes: unknown;
+  readonly stageColor: string | null;
+  readonly stageId: string | null;
+  readonly stageName: string | null;
+  readonly stageSequence: number | null;
+  readonly taskCount: number;
+}
+
+export interface TaskAssignmentCandidateRecord {
+  readonly accessRole: AccessRole;
+  readonly assigned: boolean;
+  readonly clearanceScope: AccessSubjectType;
+  readonly displayName: string;
+  readonly profileDescription: string | null;
+  readonly userId: string;
 }
 
 export interface DelegateWorkspaceRecord {
@@ -358,7 +373,7 @@ const seedDelegateStages = async (client: PoolClient, membershipId: string): Pro
     ["In progress", "in_progress", "#5ee5b5"],
     ["Waiting for input", "waiting_for_input", "#facc15"],
     ["Ready for review", "ready_for_review", "#c084fc"],
-    ["Complete", "complete", "#94a3b8"],
+    ["Done", "complete", "#94a3b8"],
   ] as const;
   for (const [sequence, [name, semanticKind, color]] of defaults.entries()) {
     await client.query(
@@ -630,6 +645,163 @@ export class CollaborationStore {
       [workspaceId, taskId],
     );
     return result.rows;
+  }
+
+  public async listTaskAssignmentCandidates(
+    workspaceId: string,
+    taskId: string,
+  ): Promise<TaskAssignmentCandidateRecord[]> {
+    const result = await this.pool.query<TaskAssignmentCandidateRecord>(
+      `WITH task_scope AS (
+         SELECT id,project_id FROM opsweave.tasks
+         WHERE workspace_id=$1 AND id=$2 AND deleted_at IS NULL
+       ), candidates AS (
+         SELECT access.delegate_user_id AS user_id,access.access_role,access.profile_description,
+           'task'::varchar AS clearance_scope,0 AS precedence
+         FROM opsweave.access_grants access
+         JOIN task_scope task ON task.id=access.subject_task_id
+         WHERE access.workspace_id=$1 AND access.status='active'
+           AND access.delegate_user_id IS NOT NULL
+           AND (access.expires_at IS NULL OR access.expires_at>now())
+         UNION ALL
+         SELECT access.delegate_user_id,access.access_role,access.profile_description,
+           'project'::varchar,1
+         FROM opsweave.access_grants access
+         JOIN task_scope task ON task.project_id=access.subject_project_id
+         WHERE access.workspace_id=$1 AND access.status='active'
+           AND access.delegate_user_id IS NOT NULL
+           AND (access.expires_at IS NULL OR access.expires_at>now())
+       ), selected AS (
+         SELECT DISTINCT ON (user_id) * FROM candidates ORDER BY user_id,precedence
+       )
+       SELECT selected.user_id AS "userId",selected.access_role AS "accessRole",
+         selected.clearance_scope AS "clearanceScope",
+         coalesce("user".full_name,"user".email,'Delegate') AS "displayName",
+         selected.profile_description AS "profileDescription",
+         EXISTS (SELECT 1 FROM opsweave.task_assignments assignment
+           WHERE assignment.task_id=$2 AND assignment.user_id=selected.user_id AND assignment.active)
+           AS assigned
+       FROM selected
+       JOIN opsweave.users "user" ON "user".id=selected.user_id AND "user".status='active'
+       JOIN opsweave.workspace_memberships membership ON membership.workspace_id=$1
+         AND membership.user_id=selected.user_id AND membership.role='delegate'
+         AND membership.status='active'
+       ORDER BY lower(coalesce("user".full_name,"user".email,'Delegate')),selected.user_id`,
+      [workspaceId, taskId],
+    );
+    return result.rows;
+  }
+
+  public async updateTaskAssignments(input: {
+    actorUserId: string;
+    delegateUserIds: readonly string[];
+    taskId: string;
+    workspaceId: string;
+  }): Promise<TaskAssignmentCandidateRecord[]> {
+    const uniqueUserIds = [...new Set(input.delegateUserIds)];
+    await transaction(this.pool, async (client) => {
+      const task = await client.query<{ projectId: string | null }>(
+        `SELECT project_id AS "projectId" FROM opsweave.tasks
+         WHERE workspace_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE`,
+        [input.workspaceId, input.taskId],
+      );
+      const currentTask = task.rows[0];
+      if (currentTask === undefined) throw new StoreConflictError("The task is unavailable.");
+      const candidates = await client.query<{
+        accessRole: AccessRole;
+        grantId: string;
+        membershipId: string;
+        userId: string;
+      }>(
+        `WITH candidates AS (
+           SELECT access.id AS grant_id,access.delegate_user_id AS user_id,access.access_role,
+             0 AS precedence
+           FROM opsweave.access_grants access
+           WHERE access.workspace_id=$1 AND access.subject_task_id=$2 AND access.status='active'
+             AND access.delegate_user_id=ANY($3::uuid[])
+             AND (access.expires_at IS NULL OR access.expires_at>now())
+           UNION ALL
+           SELECT access.id,access.delegate_user_id,access.access_role,1
+           FROM opsweave.access_grants access
+           WHERE access.workspace_id=$1 AND access.subject_project_id=$4 AND access.status='active'
+             AND access.delegate_user_id=ANY($3::uuid[])
+             AND (access.expires_at IS NULL OR access.expires_at>now())
+         ), selected AS (
+           SELECT DISTINCT ON (user_id) * FROM candidates ORDER BY user_id,precedence
+         )
+         SELECT selected.grant_id AS "grantId",selected.user_id AS "userId",
+           selected.access_role AS "accessRole",membership.id AS "membershipId"
+         FROM selected
+         JOIN opsweave.users "user" ON "user".id=selected.user_id AND "user".status='active'
+         JOIN opsweave.workspace_memberships membership ON membership.workspace_id=$1
+           AND membership.user_id=selected.user_id AND membership.role='delegate'
+           AND membership.status='active'`,
+        [input.workspaceId, input.taskId, uniqueUserIds, currentTask.projectId],
+      );
+      if (candidates.rows.length !== uniqueUserIds.length) {
+        throw new StoreConflictError(
+          "One or more selected people no longer have clearance for this task.",
+        );
+      }
+      await client.query(
+        `UPDATE opsweave.task_assignments SET active=false,ended_at=now(),updated_at=now()
+         WHERE task_id=$1 AND active AND NOT (user_id=ANY($2::uuid[]))`,
+        [input.taskId, uniqueUserIds],
+      );
+      for (const candidate of candidates.rows) {
+        const assignment = await client.query<{ id: string }>(
+          `INSERT INTO opsweave.task_assignments
+            (task_id,user_id,access_grant_id,assignment_role,created_by_user_id)
+           VALUES ($1,$2,$3,$4,$5)
+           ON CONFLICT (task_id,user_id) WHERE active DO UPDATE SET
+             access_grant_id=EXCLUDED.access_grant_id,assignment_role=EXCLUDED.assignment_role,
+             updated_at=now() RETURNING id`,
+          [
+            input.taskId,
+            candidate.userId,
+            candidate.grantId,
+            candidate.accessRole === "reviewer" ? "review" : "delivery",
+            input.actorUserId,
+          ],
+        );
+        await seedDelegateStages(client, candidate.membershipId);
+        await client.query(
+          `INSERT INTO opsweave.delegate_task_states
+            (task_id,user_id,task_assignment_id,stage_id)
+           SELECT $1,$2,$3,stage.id FROM opsweave.delegate_kanban_stages stage
+           WHERE stage.membership_id=$4 AND stage.semantic_kind='assigned' AND stage.archived_at IS NULL
+           ORDER BY stage.sequence LIMIT 1
+           ON CONFLICT (task_id,user_id) DO UPDATE SET
+             task_assignment_id=EXCLUDED.task_assignment_id,updated_at=now()`,
+          [input.taskId, candidate.userId, assignment.rows[0]?.id ?? null, candidate.membershipId],
+        );
+      }
+      const deliveryCount = candidates.rows.filter(
+        (candidate) => candidate.accessRole !== "reviewer",
+      ).length;
+      await client.query(
+        deliveryCount > 0
+          ? `UPDATE opsweave.tasks SET
+              pre_delegation_lane=CASE WHEN workflow_lane='delegated' THEN pre_delegation_lane
+                ELSE workflow_lane END,
+              workflow_lane='delegated',owner_work_assigned=false,version=version+1,updated_at=now()
+             WHERE id=$1`
+          : `UPDATE opsweave.tasks SET workflow_lane=coalesce(pre_delegation_lane,'inbox'),
+              pre_delegation_lane=NULL,owner_work_assigned=true,version=version+1,updated_at=now()
+             WHERE id=$1`,
+        [input.taskId],
+      );
+      await insertAudit(client, {
+        action: "task.assignments.updated",
+        actorUserId: input.actorUserId,
+        category: "delegation",
+        metadata: { assigneeCount: uniqueUserIds.length, deliveryAssigneeCount: deliveryCount },
+        subjectId: input.taskId,
+        subjectType: "task",
+        workspaceId: input.workspaceId,
+      });
+    });
+    return this.listTaskAssignmentCandidates(input.workspaceId, input.taskId);
   }
 
   public async setSubjectAnonymisation(input: {
@@ -2205,6 +2377,139 @@ export class CollaborationStore {
     });
   }
 
+  public async createExistingUserAccessGrant(input: {
+    accessRole: AccessRole;
+    actorUserId: string;
+    delegateUserId: string;
+    delegationNote: string | null;
+    expiresAt: Date | null;
+    subjectId: string;
+    subjectType: AccessSubjectType;
+    workspaceId: string;
+  }): Promise<AccessGrantRecord> {
+    return transaction(this.pool, async (client) => {
+      const subject = await client.query(
+        input.subjectType === "project"
+          ? `SELECT 1 FROM opsweave.projects
+             WHERE id=$1 AND workspace_id=$2 AND archived_at IS NULL FOR UPDATE`
+          : `SELECT 1 FROM opsweave.tasks
+             WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL FOR UPDATE`,
+        [input.subjectId, input.workspaceId],
+      );
+      if (subject.rowCount !== 1) throw new StoreConflictError("The shared item is unavailable.");
+      if (input.accessRole === "project_collaborator" && input.subjectType !== "project") {
+        throw new StoreConflictError("Project collaborator access requires project scope.");
+      }
+      const delegate = await client.query<{
+        email: string;
+        membershipId: string;
+        normalizedEmail: string;
+        privacyKeywords: string[];
+        profileDescription: string | null;
+      }>(
+        `SELECT "user".email,"user".normalized_email AS "normalizedEmail",
+          membership.id AS "membershipId",profile.profile_description AS "profileDescription",
+          coalesce(profile.privacy_keywords,'{}'::text[]) AS "privacyKeywords"
+         FROM opsweave.users "user"
+         JOIN opsweave.workspace_memberships membership ON membership.user_id="user".id
+           AND membership.workspace_id=$1 AND membership.role='delegate' AND membership.status='active'
+         LEFT JOIN LATERAL (
+           SELECT access.profile_description,access.privacy_keywords
+           FROM opsweave.access_grants access
+           WHERE access.workspace_id=$1 AND access.delegate_user_id="user".id
+           ORDER BY (access.profile_description IS NOT NULL) DESC,access.updated_at DESC,access.id DESC
+           LIMIT 1
+         ) profile ON true
+         WHERE "user".id=$2 AND "user".status='active'
+           AND "user".email IS NOT NULL AND "user".normalized_email IS NOT NULL`,
+        [input.workspaceId, input.delegateUserId],
+      );
+      const person = delegate.rows[0];
+      if (person === undefined)
+        throw new StoreConflictError("The delegate profile is unavailable.");
+      const created = await client.query<{ id: string }>(
+        `INSERT INTO opsweave.access_grants
+          (workspace_id,subject_type,subject_project_id,subject_task_id,delegate_user_id,
+           delegate_email,normalized_delegate_email,scope,access_role,status,activated_at,expires_at,
+           granted_by_user_id,delegation_note,profile_description,privacy_keywords)
+         VALUES ($1,$2::varchar(16),CASE WHEN $2::text='project' THEN $3::uuid END,
+           CASE WHEN $2::text='task' THEN $3::uuid END,$4,$5,$6,$2::varchar(16),$7,
+           'active',now(),$8,$9,$10,$11,$12) RETURNING id`,
+        [
+          input.workspaceId,
+          input.subjectType,
+          input.subjectId,
+          input.delegateUserId,
+          person.email,
+          person.normalizedEmail,
+          input.accessRole,
+          input.expiresAt,
+          input.actorUserId,
+          input.delegationNote,
+          person.profileDescription,
+          person.privacyKeywords,
+        ],
+      );
+      const grantId = created.rows[0]?.id;
+      if (grantId === undefined) throw new Error("Access Grant creation failed.");
+      if (input.subjectType === "task") {
+        const assignmentRole = input.accessRole === "reviewer" ? "review" : "delivery";
+        const assignment = await client.query<{ id: string }>(
+          `INSERT INTO opsweave.task_assignments
+            (task_id,user_id,access_grant_id,assignment_role,created_by_user_id)
+           VALUES ($1,$2,$3,$4,$5)
+           ON CONFLICT (task_id,user_id) WHERE active DO UPDATE SET
+             access_grant_id=EXCLUDED.access_grant_id,assignment_role=EXCLUDED.assignment_role,
+             updated_at=now() RETURNING id`,
+          [input.subjectId, input.delegateUserId, grantId, assignmentRole, input.actorUserId],
+        );
+        if (assignmentRole === "delivery") {
+          await client.query(
+            `UPDATE opsweave.tasks SET
+              pre_delegation_lane=CASE WHEN workflow_lane='delegated' THEN pre_delegation_lane
+                ELSE workflow_lane END,
+              workflow_lane='delegated',owner_work_assigned=false,version=version+1,updated_at=now()
+             WHERE id=$1`,
+            [input.subjectId],
+          );
+        }
+        await seedDelegateStages(client, person.membershipId);
+        await client.query(
+          `INSERT INTO opsweave.delegate_task_states
+            (task_id,user_id,task_assignment_id,stage_id)
+           SELECT $1,$2,$3,stage.id FROM opsweave.delegate_kanban_stages stage
+           WHERE stage.membership_id=$4 AND stage.semantic_kind='assigned' AND stage.archived_at IS NULL
+           ORDER BY stage.sequence LIMIT 1
+           ON CONFLICT (task_id,user_id) DO UPDATE SET
+             task_assignment_id=EXCLUDED.task_assignment_id,updated_at=now()`,
+          [
+            input.subjectId,
+            input.delegateUserId,
+            assignment.rows[0]?.id ?? null,
+            person.membershipId,
+          ],
+        );
+      }
+      await insertAudit(client, {
+        action: "access.existing_delegate.granted",
+        actorUserId: input.actorUserId,
+        category: "delegation",
+        metadata: { accessRole: input.accessRole, grantId, scope: input.subjectType },
+        occurredForUserId: input.delegateUserId,
+        subjectId: input.subjectId,
+        subjectType: input.subjectType,
+        workspaceId: input.workspaceId,
+      });
+      const rows = await client.query<Record<string, unknown>>(
+        `${grantSelect} WHERE access.id=$1 AND access.workspace_id=$2`,
+        [grantId, input.workspaceId],
+      );
+      const row = rows.rows[0];
+      if (row === undefined) throw new Error("Access Grant reload failed.");
+      return mapGrant(row);
+    });
+  }
+
   public async replaceAccessGrant(input: {
     accessRole?: AccessRole;
     actorUserId: string;
@@ -2604,7 +2909,7 @@ export class CollaborationStore {
         const firstStage = await client.query<{ id: string }>(
           `SELECT id FROM opsweave.delegate_kanban_stages
            WHERE membership_id=$1 AND semantic_kind=$2 AND archived_at IS NULL LIMIT 1`,
-          [membershipId, invitation.accessRole === "reviewer" ? "waiting_for_input" : "assigned"],
+          [membershipId, "assigned"],
         );
         await client.query(
           `INSERT INTO opsweave.delegate_task_states
@@ -2912,13 +3217,9 @@ export class CollaborationStore {
              FROM opsweave.access_grants access
              JOIN opsweave.projects project ON project.id=access.subject_project_id
              JOIN opsweave.tasks task ON task.project_id=project.id AND task.id=$3
-             LEFT JOIN opsweave.task_delegate_audience audience
-               ON audience.task_id=task.id AND audience.user_id=$2
              WHERE access.workspace_id=$1 AND access.delegate_user_id=$2 AND access.status='active'
                AND (access.expires_at IS NULL OR access.expires_at>now())
-               AND (task.delegate_visibility='project_delegates'
-                 OR (task.delegate_visibility='selected_delegates' AND audience.user_id IS NOT NULL)
-                 OR task.created_by_user_id=$2)
+               AND task.deleted_at IS NULL
            ) candidate
            LEFT JOIN opsweave.delegation_aliases alias ON alias.user_id=$2 AND alias.retired_at IS NULL
              AND ((alias.context_type='project' AND alias.context_project_id=candidate."aliasProjectId")
@@ -2993,6 +3294,11 @@ export class CollaborationStore {
         await seedDelegateStages(client, membershipId);
       }
       await client.query(
+        `UPDATE opsweave.delegate_kanban_stages SET name='Done',version=version+1,updated_at=now()
+         WHERE membership_id=$1 AND semantic_kind='complete' AND name='Complete' AND archived_at IS NULL`,
+        [membershipId],
+      );
+      await client.query(
         `WITH visible_tasks AS (
           SELECT access.subject_task_id AS task_id FROM opsweave.access_grants access
           WHERE access.workspace_id=$1 AND access.delegate_user_id=$2 AND access.subject_type='task'
@@ -3000,12 +3306,9 @@ export class CollaborationStore {
           UNION
           SELECT task.id FROM opsweave.access_grants access
           JOIN opsweave.tasks task ON task.project_id=access.subject_project_id
-          LEFT JOIN opsweave.task_delegate_audience audience ON audience.task_id=task.id AND audience.user_id=$2
           WHERE access.workspace_id=$1 AND access.delegate_user_id=$2 AND access.subject_type='project'
             AND access.status='active' AND (access.expires_at IS NULL OR access.expires_at>now())
-            AND task.deleted_at IS NULL AND (task.delegate_visibility='project_delegates'
-              OR (task.delegate_visibility='selected_delegates' AND audience.user_id IS NOT NULL)
-              OR task.created_by_user_id=$2)
+            AND task.deleted_at IS NULL
         )
         INSERT INTO opsweave.delegate_task_states (task_id,user_id,stage_id)
         SELECT visible.task_id,$2,stage.id FROM visible_tasks visible
@@ -3022,9 +3325,14 @@ export class CollaborationStore {
           CASE WHEN project.anonymise_delegation THEN presentation.safe_title ELSE project.name END AS name,
           CASE WHEN project.anonymise_delegation THEN presentation.safe_description ELSE project.description END AS description,
           CASE WHEN project.anonymise_delegation THEN presentation.safe_notes ELSE project.notes END AS notes,
-          access.access_role AS "accessRole",access.delegation_note AS "delegationNote",alias.alias
+          access.access_role AS "accessRole",access.delegation_note AS "delegationNote",alias.alias,
+          stage.id AS "stageId",stage.name AS "stageName",NULL::text AS "stageColor",
+          stage.sequence AS "stageSequence",
+          (SELECT count(*)::int FROM opsweave.tasks task
+            WHERE task.project_id=project.id AND task.deleted_at IS NULL) AS "taskCount"
          FROM opsweave.access_grants access
          JOIN opsweave.projects project ON project.id=access.subject_project_id
+         LEFT JOIN opsweave.project_stages stage ON stage.id=project.stage_id
          LEFT JOIN opsweave.delegate_entity_presentations presentation
            ON presentation.subject_project_id=project.id AND presentation.status='approved'
          LEFT JOIN opsweave.delegation_aliases alias ON alias.user_id=$2 AND alias.retired_at IS NULL
@@ -3033,7 +3341,7 @@ export class CollaborationStore {
            AND (access.expires_at IS NULL OR access.expires_at>now())
            AND project.archived_at IS NULL
            AND (NOT project.anonymise_delegation OR presentation.id IS NOT NULL)
-         ORDER BY access.activated_at DESC,project.id`,
+         ORDER BY stage.sequence NULLS LAST,access.activated_at DESC,project.id`,
         [workspaceId, userId],
       ),
       this.pool.query<DelegateStageRecord>(
@@ -3053,12 +3361,9 @@ export class CollaborationStore {
           SELECT task.id,access.id,access.access_role,access.delegation_note,true
           FROM opsweave.access_grants access
           JOIN opsweave.tasks task ON task.project_id=access.subject_project_id
-          LEFT JOIN opsweave.task_delegate_audience audience ON audience.task_id=task.id AND audience.user_id=$2
           WHERE access.workspace_id=$1 AND access.delegate_user_id=$2 AND access.subject_type='project'
             AND access.status='active' AND (access.expires_at IS NULL OR access.expires_at>now())
-            AND task.deleted_at IS NULL AND (task.delegate_visibility='project_delegates'
-              OR (task.delegate_visibility='selected_delegates' AND audience.user_id IS NOT NULL)
-              OR task.created_by_user_id=$2)
+            AND task.deleted_at IS NULL
         ), selected AS (
           SELECT DISTINCT ON (task_id) * FROM candidate ORDER BY task_id,inherited
         )
@@ -3073,7 +3378,10 @@ export class CollaborationStore {
           task.allocated_hours::float8 AS "allocatedHours",task.hours_spent::float8 AS "hoursSpent",
           task.due_date::text AS "dueDate",selected.access_role AS "accessRole",
           selected.delegation_note AS "delegationNote",state.stage_id AS "stageId",
-          state.latest_update AS "latestUpdate",state.version AS "stateVersion",alias.alias
+          state.latest_update AS "latestUpdate",state.version AS "stateVersion",alias.alias,
+          EXISTS (SELECT 1 FROM opsweave.task_assignments assignment
+            WHERE assignment.task_id=task.id AND assignment.user_id=$2
+              AND assignment.active) AS assigned
         FROM selected JOIN opsweave.tasks task ON task.id=selected.task_id
         LEFT JOIN opsweave.projects project ON project.id=task.project_id
         CROSS JOIN LATERAL (SELECT coalesce(project.anonymise_delegation,false)
@@ -3401,6 +3709,24 @@ export class CollaborationStore {
     });
   }
 
+  public async updateDelegateStage(
+    membershipId: string,
+    stageId: string,
+    name: string,
+    version: number,
+  ): Promise<DelegateStageRecord> {
+    const result = await this.pool.query<DelegateStageRecord>(
+      `UPDATE opsweave.delegate_kanban_stages SET name=$3,version=version+1,updated_at=now()
+       WHERE id=$1 AND membership_id=$2 AND version=$4 AND archived_at IS NULL
+       RETURNING id,name,semantic_kind AS "semanticKind",color,sequence,
+         archived_at AS "archivedAt",version`,
+      [stageId, membershipId, name, version],
+    );
+    const stage = result.rows[0];
+    if (stage === undefined) throw new StoreConflictError("The stage changed or is unavailable.");
+    return stage;
+  }
+
   public async updateDelegateTaskState(input: {
     latestUpdate: string | null;
     membershipId: string;
@@ -3414,12 +3740,11 @@ export class CollaborationStore {
       const access = await client.query<{ accessRole: AccessRole }>(
         `SELECT access.access_role AS "accessRole" FROM opsweave.access_grants access
          LEFT JOIN opsweave.tasks task ON task.id=$3
-         LEFT JOIN opsweave.task_delegate_audience audience ON audience.task_id=task.id AND audience.user_id=$2
          WHERE access.workspace_id=$1 AND access.delegate_user_id=$2 AND access.status='active'
            AND (access.expires_at IS NULL OR access.expires_at>now())
-           AND (access.subject_task_id=$3 OR (access.subject_project_id=task.project_id AND
-             (task.delegate_visibility='project_delegates' OR audience.user_id IS NOT NULL
-               OR task.created_by_user_id=$2))) LIMIT 1`,
+           AND task.deleted_at IS NULL
+           AND (access.subject_task_id=$3 OR access.subject_project_id=task.project_id)
+         ORDER BY (access.subject_task_id=$3) DESC LIMIT 1`,
         [input.workspaceId, input.userId, input.taskId],
       );
       if (access.rows[0] === undefined) throw new StoreConflictError("The task is unavailable.");
@@ -3431,6 +3756,7 @@ export class CollaborationStore {
       if (stage.rows[0] === undefined) throw new StoreConflictError("The stage is unavailable.");
       if (
         access.rows[0].accessRole === "reviewer" &&
+        stage.rows[0].semanticKind !== "assigned" &&
         stage.rows[0].semanticKind !== "waiting_for_input" &&
         stage.rows[0].semanticKind !== "complete" &&
         stage.rows[0].semanticKind !== "custom"

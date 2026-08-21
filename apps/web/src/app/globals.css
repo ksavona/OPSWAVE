@@ -164,6 +164,12 @@
   justify-content: space-between;
 }
 
+.delegate-column > header > div {
+  align-items: center;
+  display: flex;
+  gap: 0.35rem;
+}
+
 .delegate-column > header h3 {
   font-size: 1rem;
   margin: 0;
@@ -203,6 +209,18 @@
 
 .delegate-projects {
   margin-top: 1.25rem;
+}
+
+.delegate-project-board .delegate-column {
+  min-height: 10rem;
+}
+
+.delegate-task-heading {
+  margin-top: 1.5rem;
+}
+
+.existing-profile-grant {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
 .delegate-project-grid {

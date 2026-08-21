@@ -215,14 +215,14 @@ If a deployment contains legacy `tasks.delegate_id` values, create an owner-visi
 
 #### Task additions
 
-- `delegate_visibility`: `internal`, `project_delegates`, or `selected_delegates`, default `internal`
+- `delegate_visibility`: retained for migration compatibility and document/audience policy only; it must not narrow an active Project Access Grant
 - `created_by_user_id`
 - `owner_work_assigned boolean`, default `true` for current tasks
 - `pre_delegation_lane` nullable compatibility/suggestion field
 
 #### `task_delegate_audience`
 
-Links a selected-visible task to specifically authorised project delegates. A direct active task Access Grant always grants the direct task regardless of this table.
+Legacy compatibility table for explicitly selected Task audiences. Access resolution no longer relies on this table: Project clearance covers every linked Task, while a direct active Task Access Grant covers only that Task.
 
 #### `task_assignments`
 
@@ -438,9 +438,9 @@ A Project is delegate-visible only through an active, unexpired Project Access G
 A Task is delegate-visible when one of these is true:
 
 - The user has an active, unexpired direct Task Access Grant.
-- The user has an active Project Access Grant and the Task is `project_delegates` visible.
-- The user has an active Project Access Grant and appears in `task_delegate_audience` for a selected-visible Task.
-- The user created the Task under a permitted Project collaborator workflow; creation transactionally adds selected visibility and an assignment for that user.
+- The user has an active, unexpired Project Access Grant for the Task's parent Project.
+
+Task Assignment is a separate responsibility record and cannot expand visibility. Owners may assign only users who already satisfy one of the clearance rules above. A user who creates a Task under a permitted Project collaborator workflow is transactionally assigned to that Task.
 
 A task-level grant does not reveal the parent Project, unrelated Tasks, Project documents, client name, or participant list. It may receive only a minimal neutral parent-context label required to understand the Task.
 

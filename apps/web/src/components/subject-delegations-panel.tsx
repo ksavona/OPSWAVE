@@ -40,6 +40,25 @@ interface ProgressView {
   totalTimeLogged: number;
 }
 
+interface ExistingDelegateView {
+  activeGrantCount: number;
+  email: string | null;
+  fullName: string | null;
+  membershipStatus: string;
+  role: "admin" | "delegate" | "owner";
+  userId: string;
+  userStatus: string;
+}
+
+interface TaskAssigneeView {
+  accessRole: GrantView["accessRole"];
+  assigned: boolean;
+  clearanceScope: "project" | "task";
+  displayName: string;
+  profileDescription: string | null;
+  userId: string;
+}
+
 interface PresentationView {
   neutralClientLabel: string | null;
   neutralProjectLabel: string | null;
@@ -98,10 +117,8 @@ export const SubjectDelegationsPanel = ({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [invitationUrl, setInvitationUrl] = useState<string | null>(null);
-  const [taskVisibility, setTaskVisibility] = useState<
-    "internal" | "project_delegates" | "selected_delegates"
-  >("internal");
-  const [selectedProjectUsers, setSelectedProjectUsers] = useState<string[]>([]);
+  const [existingDelegates, setExistingDelegates] = useState<ExistingDelegateView[]>([]);
+  const [taskAssignees, setTaskAssignees] = useState<TaskAssigneeView[]>([]);
   const [anonymisation, setAnonymisation] = useState({
     effective: false,
     inherited: false,
@@ -114,7 +131,8 @@ export const SubjectDelegationsPanel = ({
     const [
       grantResponse,
       progressResponse,
-      sharingResponse,
+      userResponse,
+      assignmentResponse,
       anonymisationResponse,
       presentationResponse,
     ] = await Promise.all([
@@ -125,9 +143,13 @@ export const SubjectDelegationsPanel = ({
             "GET",
           )
         : Promise.resolve({ progress: [] }),
+      workspaceRequest("/api/users", "GET"),
       subjectType === "task"
-        ? workspaceRequest(`/api/delegations/task-sharing/${encodeURIComponent(subjectId)}`, "GET")
-        : Promise.resolve({ sharing: null }),
+        ? workspaceRequest(
+            `/api/delegations/task-assignments/${encodeURIComponent(subjectId)}`,
+            "GET",
+          )
+        : Promise.resolve({ assignees: [] }),
       workspaceRequest(
         `/api/delegations/anonymisation?subjectId=${encodeURIComponent(subjectId)}&subjectType=${subjectType}`,
         "GET",
@@ -141,15 +163,18 @@ export const SubjectDelegationsPanel = ({
     setProgress(
       Array.isArray(progressResponse.progress) ? (progressResponse.progress as ProgressView[]) : [],
     );
-    if (subjectType === "task" && sharingResponse.sharing !== null) {
-      const sharing = sharingResponse.sharing as {
-        selectedUserIds: string[];
-        visibility: "internal" | "project_delegates" | "selected_delegates";
-      };
-      setTaskVisibility(sharing.visibility);
-      setSelectedProjectUsers(sharing.selectedUserIds);
-    }
-    if (anonymisationResponse.anonymisation !== null) {
+    setExistingDelegates(
+      Array.isArray(userResponse.users) ? (userResponse.users as ExistingDelegateView[]) : [],
+    );
+    setTaskAssignees(
+      Array.isArray(assignmentResponse.assignees)
+        ? (assignmentResponse.assignees as TaskAssigneeView[])
+        : [],
+    );
+    if (
+      anonymisationResponse.anonymisation !== null &&
+      typeof anonymisationResponse.anonymisation === "object"
+    ) {
       const nextAnonymisation = anonymisationResponse.anonymisation as {
         effective: boolean;
         inherited: boolean;
@@ -215,6 +240,39 @@ export const SubjectDelegationsPanel = ({
       await onChanged();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to create the delegation.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const grantExisting = async (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    setBusy(true);
+    setInvitationUrl(null);
+    try {
+      await workspaceRequest("/api/delegations/existing", "POST", {
+        accessRole: data.get("accessRole"),
+        delegateUserId: data.get("delegateUserId"),
+        delegationNote: formText(data.get("delegationNote")).trim() || null,
+        expiresAt:
+          formText(data.get("expiresAt")).length === 0
+            ? null
+            : new Date(formText(data.get("expiresAt"))).toISOString(),
+        subjectId,
+        subjectType,
+      });
+      form.reset();
+      await refresh();
+      await onChanged();
+      setMessage(
+        subjectType === "project"
+          ? "Project clearance granted immediately. Every linked task is now visible."
+          : "Task clearance and assignment granted immediately.",
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to grant access.");
     } finally {
       setBusy(false);
     }
@@ -321,22 +379,26 @@ export const SubjectDelegationsPanel = ({
     }
   };
 
-  const saveTaskSharing = async () => {
+  const saveTaskAssignments = async () => {
     setBusy(true);
     try {
-      await workspaceRequest(
-        `/api/delegations/task-sharing/${encodeURIComponent(subjectId)}`,
+      const response = await workspaceRequest(
+        `/api/delegations/task-assignments/${encodeURIComponent(subjectId)}`,
         "PATCH",
         {
-          selectedUserIds: taskVisibility === "selected_delegates" ? selectedProjectUsers : [],
-          visibility: taskVisibility,
+          delegateUserIds: taskAssignees
+            .filter((candidate) => candidate.assigned)
+            .map((candidate) => candidate.userId),
         },
+      );
+      setTaskAssignees(
+        Array.isArray(response.assignees) ? (response.assignees as TaskAssigneeView[]) : [],
       );
       await refresh();
       await onChanged();
-      setMessage("Task sharing updated. Project access now follows this rule.");
+      setMessage("Task assignments updated. Clearance was not changed.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to update task sharing.");
+      setMessage(error instanceof Error ? error.message : "Unable to update task assignments.");
     } finally {
       setBusy(false);
     }
@@ -399,9 +461,19 @@ export const SubjectDelegationsPanel = ({
     }
   };
 
-  const projectDelegates = grants.filter(
-    (grant) =>
-      grant.scope === "project" && grant.status === "active" && grant.delegateUserId !== null,
+  const usersWithLiveClearance = new Set(
+    grants
+      .filter((grant) => grant.status === "active" || grant.status === "invite_pending")
+      .map((grant) => grant.delegateUserId)
+      .filter((userId): userId is string => userId !== null),
+  );
+  const reusableProfiles = existingDelegates.filter(
+    (person) =>
+      person.role === "delegate" &&
+      person.membershipStatus === "active" &&
+      person.userStatus === "active" &&
+      person.email !== null &&
+      !usersWithLiveClearance.has(person.userId),
   );
 
   return (
@@ -517,6 +589,54 @@ export const SubjectDelegationsPanel = ({
           </form>
         </details>
       )}
+      <form
+        className="delegation-form existing-profile-grant"
+        onSubmit={(event) => void grantExisting(event)}
+      >
+        <div className="span-two">
+          <h4>Grant clearance to an existing profile</h4>
+          <p className="muted">
+            Project clearance reveals the complete project and every linked task. Task clearance
+            reveals and assigns only this task.
+          </p>
+        </div>
+        <label>
+          Existing person
+          <select disabled={reusableProfiles.length === 0} name="delegateUserId" required>
+            <option value="">Select a delegate</option>
+            {reusableProfiles.map((person) => (
+              <option key={person.userId} value={person.userId}>
+                {person.fullName ?? person.email}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Role
+          <select defaultValue="contributor" name="accessRole">
+            <option value="contributor">Contributor</option>
+            {subjectType === "project" ? (
+              <option value="project_collaborator">Project collaborator</option>
+            ) : null}
+            <option value="reviewer">Reviewer</option>
+          </select>
+        </label>
+        <label>
+          Expires
+          <input name="expiresAt" type="datetime-local" />
+        </label>
+        <label className="span-two">
+          Instruction for this work
+          <textarea maxLength={4000} name="delegationNote" rows={2} />
+        </label>
+        <button disabled={busy || reusableProfiles.length === 0} type="submit">
+          Grant access now
+        </button>
+        {reusableProfiles.length === 0 ? (
+          <p className="muted">No additional active delegate profiles are available.</p>
+        ) : null}
+      </form>
+      <h4>Invite a new person</h4>
       <form className="delegation-form" onSubmit={(event) => void create(event)}>
         <label>
           Delegate email
@@ -612,64 +732,55 @@ export const SubjectDelegationsPanel = ({
             onUpdate={updateGrant}
           />
           <div className="task-sharing-control">
-            <label>
-              <span>
-                Project delegate access to this task
-                <HelpTip label="Project delegate access to this task">
-                  Internal allows only direct task delegates. All active project delegates shares
-                  this task with every active project delegate. Selected shares it only with the
-                  people you choose below.
+            <div>
+              <h4>
+                Task assignees
+                <HelpTip label="Task assignees and clearance">
+                  A project Access Pass automatically gives visibility to every project task.
+                  Assignment identifies who is responsible for this task without creating another
+                  grant. A direct task Access Pass remains limited to this task.
                 </HelpTip>
-              </span>
-              <select
-                onChange={(event) => {
-                  setTaskVisibility(
-                    event.target.value as "internal" | "project_delegates" | "selected_delegates",
-                  );
-                }}
-                value={taskVisibility}
-              >
-                <option value="internal">Internal — direct task delegates only</option>
-                <option value="project_delegates">All active project delegates</option>
-                <option value="selected_delegates">Selected project delegates</option>
-              </select>
-            </label>
-            {taskVisibility === "selected_delegates" ? (
-              <fieldset>
-                <legend>Selected project delegates</legend>
-                {projectDelegates.map((grant) => (
-                  <label className="checkbox-row" key={grant.id}>
-                    <input
-                      checked={selectedProjectUsers.includes(grant.delegateUserId ?? "")}
-                      onChange={(event) => {
-                        const userId = grant.delegateUserId;
-                        if (userId === null) return;
-                        setSelectedProjectUsers((current) =>
-                          event.target.checked
-                            ? [...new Set([...current, userId])]
-                            : current.filter((candidate) => candidate !== userId),
-                        );
-                      }}
-                      type="checkbox"
-                    />
-                    {grant.delegateFullName ?? grant.delegateEmail}
-                  </label>
-                ))}
-                {projectDelegates.length === 0 ? (
-                  <p className="muted">There are no active project delegates to select.</p>
-                ) : null}
-              </fieldset>
-            ) : null}
+              </h4>
+              <p className="muted">
+                Select responsible people from those who already have project or task clearance.
+              </p>
+            </div>
+            <fieldset>
+              <legend>People with clearance</legend>
+              {taskAssignees.map((candidate) => (
+                <label className="checkbox-row" key={candidate.userId}>
+                  <input
+                    checked={candidate.assigned}
+                    onChange={(event) => {
+                      setTaskAssignees((current) =>
+                        current.map((item) =>
+                          item.userId === candidate.userId
+                            ? { ...item, assigned: event.target.checked }
+                            : item,
+                        ),
+                      );
+                    }}
+                    type="checkbox"
+                  />
+                  <span>
+                    {candidate.displayName} · {candidate.clearanceScope} clearance ·{" "}
+                    {candidate.accessRole.replaceAll("_", " ")}
+                  </span>
+                </label>
+              ))}
+              {taskAssignees.length === 0 ? (
+                <p className="muted">
+                  Grant task clearance or project clearance before assigning this task.
+                </p>
+              ) : null}
+            </fieldset>
             <button
               className="secondary compact"
-              disabled={
-                busy ||
-                (taskVisibility === "selected_delegates" && selectedProjectUsers.length === 0)
-              }
-              onClick={() => void saveTaskSharing()}
+              disabled={busy || taskAssignees.length === 0}
+              onClick={() => void saveTaskAssignments()}
               type="button"
             >
-              Save task sharing
+              Save task assignees
             </button>
           </div>
         </>

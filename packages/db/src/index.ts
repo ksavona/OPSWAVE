@@ -23,6 +23,7 @@ export {
   type InvitationRecord,
   type NotificationRecord,
   type SubjectParticipantRecord,
+  type TaskAssignmentCandidateRecord,
 } from "./collaboration-store.ts";
 export { opsweaveSchema, systemMetadata } from "./schema.ts";
 export {

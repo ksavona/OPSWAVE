@@ -4,10 +4,13 @@ import {
   attachmentSharingSchema,
   delegationCreateSchema,
   delegationUpdateSchema,
+  delegateStageUpdateSchema,
+  existingDelegateGrantSchema,
   hasWorkspaceCapability,
   isGrantActive,
   normalizeEmail,
   taskDelegateSharingSchema,
+  taskAssignmentUpdateSchema,
   type Principal,
 } from "./access.ts";
 
@@ -108,6 +111,41 @@ describe("multi-user access rules", () => {
         version: 2,
       }).success,
     ).toBe(true);
+  });
+
+  it("validates reusable clearance, assignments, and private-stage renaming", () => {
+    const userId = "2b0bf5da-d358-4ab5-92a3-b8d351b963fb";
+    const subjectId = "fc7d9f6e-4973-49b0-b621-e26215b44d98";
+    expect(
+      existingDelegateGrantSchema.safeParse({
+        accessRole: "contributor",
+        delegateUserId: userId,
+        subjectId,
+        subjectType: "project",
+      }).success,
+    ).toBe(true);
+    expect(
+      existingDelegateGrantSchema.safeParse({
+        accessRole: "project_collaborator",
+        delegateUserId: userId,
+        subjectId,
+        subjectType: "task",
+      }).success,
+    ).toBe(false);
+    expect(
+      existingDelegateGrantSchema.safeParse({
+        accessRole: "contributor",
+        delegateUserId: userId,
+        expiresAt: new Date(0).toISOString(),
+        subjectId,
+        subjectType: "task",
+      }).success,
+    ).toBe(false);
+    expect(taskAssignmentUpdateSchema.parse({ delegateUserIds: [userId, userId] })).toEqual({
+      delegateUserIds: [userId, userId],
+    });
+    expect(delegateStageUpdateSchema.safeParse({ name: "Done", version: 1 }).success).toBe(true);
+    expect(delegateStageUpdateSchema.safeParse({ name: "", version: 1 }).success).toBe(false);
   });
 
   it("requires recipients for selected-only task and attachment sharing", () => {

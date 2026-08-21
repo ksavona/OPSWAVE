@@ -1,6 +1,7 @@
 import {
   SafeApplicationError,
   delegateStageCreateSchema,
+  delegateStageUpdateSchema,
   delegateProjectTaskCreateSchema,
   delegateStateUpdateSchema,
   delegateSubtaskCreateSchema,
@@ -36,6 +37,25 @@ export class DelegateService {
     await this.authorization.requireCollaborationEnabled(session);
     const input = delegateStageCreateSchema.parse(value);
     return this.store.createDelegateStage(session.membershipId, input.name, input.color);
+  }
+
+  public async updateStage(session: PrincipalSessionRecord, stageId: string, value: unknown) {
+    this.authorization.requireCapability(session, "delegate.stage.update");
+    await this.authorization.requireCollaborationEnabled(session);
+    const input = delegateStageUpdateSchema.parse(value);
+    try {
+      return await this.store.updateDelegateStage(
+        session.membershipId,
+        stageId,
+        input.name,
+        input.version,
+      );
+    } catch (error) {
+      if (error instanceof StoreConflictError) {
+        throw new SafeApplicationError("conflict", error.message, 409);
+      }
+      throw error;
+    }
   }
 
   public async updateTaskState(session: PrincipalSessionRecord, taskId: string, value: unknown) {

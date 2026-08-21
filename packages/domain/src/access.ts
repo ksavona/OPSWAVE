@@ -158,6 +158,32 @@ export const delegationCreateSchema = z
     }
   });
 
+export const existingDelegateGrantSchema = z
+  .object({
+    accessRole: z.enum(ACCESS_ROLES),
+    delegateUserId: z.uuid(),
+    delegationNote: z.string().trim().max(4_000).nullable().default(null),
+    expiresAt: z.iso.datetime().nullable().default(null),
+    subjectId: z.uuid(),
+    subjectType: z.enum(ACCESS_SUBJECT_TYPES),
+  })
+  .superRefine((value, context) => {
+    if (value.accessRole === "project_collaborator" && value.subjectType !== "project") {
+      context.addIssue({
+        code: "custom",
+        message: "Project collaborators require project-level access.",
+        path: ["accessRole"],
+      });
+    }
+    if (value.expiresAt !== null && new Date(value.expiresAt).getTime() <= Date.now()) {
+      context.addIssue({
+        code: "custom",
+        message: "Access expiry must be in the future.",
+        path: ["expiresAt"],
+      });
+    }
+  });
+
 export const delegationUpdateSchema = z
   .object({
     accessRole: z.enum(ACCESS_ROLES).optional(),
@@ -194,10 +220,19 @@ export const delegateStageCreateSchema = z.object({
   name: z.string().trim().min(1).max(100),
 });
 
+export const delegateStageUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  version: z.number().int().positive(),
+});
+
 export const delegateStateUpdateSchema = z.object({
   latestUpdate: z.string().trim().max(2_000).nullable().default(null),
   stageId: z.uuid(),
   version: z.number().int().positive(),
+});
+
+export const taskAssignmentUpdateSchema = z.object({
+  delegateUserIds: z.array(z.uuid()).max(100).default([]),
 });
 
 export const delegateProjectTaskCreateSchema = z.object({

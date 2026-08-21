@@ -8,6 +8,8 @@ import {
   delegationCreateSchema,
   delegationUpdateSchema,
   emailDeliveryConfigurationSchema,
+  existingDelegateGrantSchema,
+  taskAssignmentUpdateSchema,
   taskDelegateSharingSchema,
 } from "@opsweave/domain";
 import {
@@ -46,6 +48,33 @@ export class DelegationService {
   public async taskProgress(session: PrincipalSessionRecord, taskId: string) {
     this.authorization.requireOwnerOrAdmin(session);
     return this.store.listTaskDelegationProgress(session.workspaceId, taskId);
+  }
+
+  public async taskAssignments(session: PrincipalSessionRecord, taskId: string) {
+    this.authorization.requireOwnerOrAdmin(session);
+    return this.store.listTaskAssignmentCandidates(session.workspaceId, taskId);
+  }
+
+  public async updateTaskAssignments(
+    session: PrincipalSessionRecord,
+    taskId: string,
+    value: unknown,
+  ) {
+    const principal = this.authorization.requireOwnerOrAdmin(session);
+    const input = taskAssignmentUpdateSchema.parse(value);
+    try {
+      return await this.store.updateTaskAssignments({
+        actorUserId: principal.userId,
+        delegateUserIds: input.delegateUserIds,
+        taskId,
+        workspaceId: principal.workspaceId,
+      });
+    } catch (error) {
+      if (error instanceof StoreConflictError) {
+        throw new SafeApplicationError("conflict", error.message, 409);
+      }
+      throw error;
+    }
   }
 
   public async taskSharing(session: PrincipalSessionRecord, taskId: string) {
@@ -257,6 +286,34 @@ export class DelegationService {
         throw new SafeApplicationError(
           "conflict",
           error instanceof Error ? error.message : "This delegate already has live access.",
+          409,
+        );
+      }
+      throw error;
+    }
+  }
+
+  public async grantExisting(session: PrincipalSessionRecord, value: unknown) {
+    const principal = this.authorization.requireOwnerOrAdmin(session);
+    const input = existingDelegateGrantSchema.parse(value);
+    try {
+      const grant = await this.store.createExistingUserAccessGrant({
+        accessRole: input.accessRole,
+        actorUserId: principal.userId,
+        delegateUserId: input.delegateUserId,
+        delegationNote: input.delegationNote,
+        expiresAt: input.expiresAt === null ? null : new Date(input.expiresAt),
+        subjectId: input.subjectId,
+        subjectType: input.subjectType,
+        workspaceId: principal.workspaceId,
+      });
+      await this.provisionAliases(principal.workspaceId, input.delegateUserId);
+      return grant;
+    } catch (error) {
+      if (error instanceof StoreConflictError || (error as { code?: string }).code === "23505") {
+        throw new SafeApplicationError(
+          "conflict",
+          error instanceof Error ? error.message : "This person already has live access.",
           409,
         );
       }

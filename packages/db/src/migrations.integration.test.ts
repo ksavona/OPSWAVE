@@ -859,7 +859,7 @@ describe("database migrations and repositories", () => {
     ).toMatchObject({ hoursSpent: 0 });
   });
 
-  it("enforces project task audiences and lets only project collaborators create scoped tasks", async () => {
+  it("inherits project clearance across tasks and keeps assignment separate", async () => {
     const owner = await store.findUserForLogin("synthetic-owner");
     if (!owner?.ownerId) throw new Error("Expected unified owner.");
     const project = await store.createProject(owner.workspaceId, owner.ownerId, {
@@ -881,6 +881,8 @@ describe("database migrations and repositories", () => {
       expiresAt: new Date("2030-09-01T00:00:00.000Z"),
       invitationExpiresAt: new Date("2030-08-20T00:00:00.000Z"),
       invitationTokenDigest: digest,
+      privacyKeywords: ["project-collaborator.example.test"],
+      profileDescription: "Reusable project collaborator profile.",
       subjectId: project.id,
       subjectType: "project",
       workspaceId: owner.workspaceId,
@@ -899,7 +901,77 @@ describe("database migrations and repositories", () => {
         "task",
         internalTask.id,
       ),
-    ).toBeNull();
+    ).toMatchObject({ accessRole: "project_collaborator", inherited: true });
+    const visibleWorkspace = await collaboration.listDelegateWorkspace(
+      owner.workspaceId,
+      collaborator.membershipId,
+      accepted.userId,
+    );
+    expect(visibleWorkspace.projects).toContainEqual(
+      expect.objectContaining({ id: project.id, taskCount: 1 }),
+    );
+    expect(visibleWorkspace.tasks).toContainEqual(
+      expect.objectContaining({ assigned: false, id: internalTask.id }),
+    );
+    const doneStage = visibleWorkspace.stages.find((stage) => stage.semanticKind === "complete");
+    if (doneStage === undefined) throw new Error("Expected Done stage.");
+    expect(doneStage.name).toBe("Done");
+    expect(
+      await collaboration.updateDelegateStage(
+        collaborator.membershipId,
+        doneStage.id,
+        "Completed",
+        doneStage.version,
+      ),
+    ).toMatchObject({ name: "Completed", version: doneStage.version + 1 });
+    expect(
+      await collaboration.listTaskAssignmentCandidates(owner.workspaceId, internalTask.id),
+    ).toContainEqual(
+      expect.objectContaining({
+        assigned: false,
+        clearanceScope: "project",
+        userId: accepted.userId,
+      }),
+    );
+    expect(
+      await collaboration.updateTaskAssignments({
+        actorUserId: owner.userId,
+        delegateUserIds: [accepted.userId],
+        taskId: internalTask.id,
+        workspaceId: owner.workspaceId,
+      }),
+    ).toContainEqual(expect.objectContaining({ assigned: true, userId: accepted.userId }));
+    expect(
+      (
+        await collaboration.listDelegateWorkspace(
+          owner.workspaceId,
+          collaborator.membershipId,
+          accepted.userId,
+        )
+      ).tasks,
+    ).toContainEqual(expect.objectContaining({ assigned: true, id: internalTask.id }));
+    expect(
+      (await store.listTasks(owner.workspaceId, "manual")).find(
+        (candidate) => candidate.id === internalTask.id,
+      ),
+    ).toMatchObject({ ownerWorkAssigned: false, workflowLane: "delegated" });
+    expect(
+      await collaboration.updateTaskAssignments({
+        actorUserId: owner.userId,
+        delegateUserIds: [],
+        taskId: internalTask.id,
+        workspaceId: owner.workspaceId,
+      }),
+    ).toContainEqual(expect.objectContaining({ assigned: false, userId: accepted.userId }));
+    expect(
+      (
+        await collaboration.listDelegateWorkspace(
+          owner.workspaceId,
+          collaborator.membershipId,
+          accepted.userId,
+        )
+      ).tasks,
+    ).toContainEqual(expect.objectContaining({ assigned: false, id: internalTask.id }));
     await collaboration.updateTaskDelegateSharing({
       actorUserId: owner.userId,
       selectedUserIds: [],
@@ -926,6 +998,67 @@ describe("database migrations and repositories", () => {
       selectedUserIds: [accepted.userId],
       visibility: "selected_delegates",
     });
+    expect(
+      await collaboration.resolveAccess(
+        owner.workspaceId,
+        accepted.userId,
+        "task",
+        internalTask.id,
+      ),
+    ).toMatchObject({ inherited: true });
+    const reusedProject = await store.createProject(owner.workspaceId, owner.ownerId, {
+      name: "Existing-profile clearance fixture",
+    });
+    const reusedProjectTask = await store.createTask(owner.workspaceId, owner.ownerId, {
+      projectId: reusedProject.id,
+      title: "Visible through reused project clearance",
+    });
+    const reusedProjectGrant = await collaboration.createExistingUserAccessGrant({
+      accessRole: "contributor",
+      actorUserId: owner.userId,
+      delegateUserId: accepted.userId,
+      delegationNote: "Use the existing delegate profile.",
+      expiresAt: null,
+      subjectId: reusedProject.id,
+      subjectType: "project",
+      workspaceId: owner.workspaceId,
+    });
+    expect(reusedProjectGrant).toMatchObject({
+      profileDescription: "Reusable project collaborator profile.",
+      status: "active",
+    });
+    expect(
+      await collaboration.resolveAccess(
+        owner.workspaceId,
+        accepted.userId,
+        "task",
+        reusedProjectTask.id,
+      ),
+    ).toMatchObject({ inherited: true });
+    const standaloneTask = await store.createTask(owner.workspaceId, owner.ownerId, {
+      title: "Existing-profile direct task fixture",
+    });
+    await collaboration.createExistingUserAccessGrant({
+      accessRole: "contributor",
+      actorUserId: owner.userId,
+      delegateUserId: accepted.userId,
+      delegationNote: null,
+      expiresAt: null,
+      subjectId: standaloneTask.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    expect(
+      await collaboration.resolveAccess(
+        owner.workspaceId,
+        accepted.userId,
+        "task",
+        standaloneTask.id,
+      ),
+    ).toMatchObject({ inherited: false });
+    expect(
+      await collaboration.listTaskAssignmentCandidates(owner.workspaceId, standaloneTask.id),
+    ).toContainEqual(expect.objectContaining({ assigned: true, userId: accepted.userId }));
     const createdTaskId = await collaboration.createDelegateProjectTask({
       allocatedHours: 1.5,
       actorUserId: accepted.userId,

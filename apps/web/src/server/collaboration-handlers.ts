@@ -78,6 +78,22 @@ export const delegationsHandler = (request: Request) =>
     );
   });
 
+export const existingDelegationHandler = (request: Request) =>
+  run(async () => {
+    assertSameOrigin(request);
+    const session = await requirePrincipal(request);
+    await auth().consumeSensitiveAction(session.userId);
+    return json(
+      {
+        grant: await new DelegationService(getCollaborationStore()).grantExisting(
+          session,
+          await body(request),
+        ),
+      },
+      201,
+    );
+  });
+
 export const delegationHandler = (request: Request, grantIdValue: string) =>
   run(async () => {
     const session = await requirePrincipal(request);
@@ -144,6 +160,20 @@ export const delegationProgressHandler = (request: Request) =>
         await requirePrincipal(request),
         entityIdSchema.parse(url.searchParams.get("taskId")),
       ),
+    });
+  });
+
+export const taskAssignmentsHandler = (request: Request, taskIdValue: string) =>
+  run(async () => {
+    const session = await requirePrincipal(request);
+    const taskId = entityIdSchema.parse(taskIdValue);
+    const service = new DelegationService(getCollaborationStore());
+    if (request.method === "GET") {
+      return json({ assignees: await service.taskAssignments(session, taskId) });
+    }
+    assertSameOrigin(request);
+    return json({
+      assignees: await service.updateTaskAssignments(session, taskId, await body(request)),
     });
   });
 
@@ -317,6 +347,18 @@ export const delegateStagesHandler = (request: Request) =>
       },
       201,
     );
+  });
+
+export const delegateStageHandler = (request: Request, stageIdValue: string) =>
+  run(async () => {
+    assertSameOrigin(request);
+    return json({
+      stage: await new DelegateService(getCollaborationStore()).updateStage(
+        await requirePrincipal(request),
+        entityIdSchema.parse(stageIdValue),
+        await body(request),
+      ),
+    });
   });
 
 export const delegateTaskStateHandler = (request: Request, taskIdValue: string) =>

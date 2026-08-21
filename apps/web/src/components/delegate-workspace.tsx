@@ -17,6 +17,7 @@ interface Stage {
 
 interface DelegateTask {
   accessRole: string;
+  assigned: boolean;
   alias: string | null;
   allocatedHours: number | null;
   definitionOfDone: string | null;
@@ -41,6 +42,11 @@ interface DelegateProject {
   id: string;
   name: string;
   notes: unknown;
+  stageColor: string | null;
+  stageId: string | null;
+  stageName: string | null;
+  stageSequence: number | null;
+  taskCount: number;
 }
 
 const noteText = (value: unknown): string => {
@@ -57,6 +63,7 @@ const noteText = (value: unknown): string => {
 
 const formText = (value: FormDataEntryValue | null): string =>
   typeof value === "string" ? value : "";
+const projectStageColors = ["#7dd3fc", "#5ee5b5", "#94a3b8", "#f59e0b", "#c084fc"];
 
 export const DelegateWorkspace = ({
   initial,
@@ -76,6 +83,27 @@ export const DelegateWorkspace = ({
       stages.filter((stage) => stage.archivedAt === null).sort((a, b) => a.sequence - b.sequence),
     [stages],
   );
+  const projectColumns = useMemo(() => {
+    const columns = new Map<
+      string,
+      { color: string; id: string; name: string; sequence: number }
+    >();
+    for (const project of projects) {
+      const id = project.stageId ?? "unassigned";
+      if (!columns.has(id)) {
+        columns.set(id, {
+          color:
+            project.stageColor ??
+            projectStageColors[(project.stageSequence ?? 0) % projectStageColors.length] ??
+            "#64748b",
+          id,
+          name: project.stageName ?? "Unassigned",
+          sequence: project.stageSequence ?? Number.MAX_SAFE_INTEGER,
+        });
+      }
+    }
+    return [...columns.values()].sort((left, right) => left.sequence - right.sequence);
+  }, [projects]);
 
   const refresh = async () => {
     const response = await workspaceRequest("/api/delegate/workspace", "GET");
@@ -139,6 +167,21 @@ export const DelegateWorkspace = ({
     }
   };
 
+  const renameStage = async (stage: Stage) => {
+    const name = window.prompt("Stage name:", stage.name);
+    if (name === null || name.trim().length === 0 || name.trim() === stage.name) return;
+    try {
+      await workspaceRequest(`/api/delegate/stages/${encodeURIComponent(stage.id)}`, "PATCH", {
+        name: name.trim(),
+        version: stage.version,
+      });
+      await refresh();
+      setMessage("Private stage renamed.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "The stage could not be renamed.");
+    }
+  };
+
   return (
     <section className="delegate-board-shell" aria-labelledby="delegate-board-heading">
       <div className="section-heading-row">
@@ -165,95 +208,140 @@ export const DelegateWorkspace = ({
       ) : null}
       {projects.length > 0 ? (
         <section className="delegate-projects" aria-labelledby="delegate-projects-heading">
-          <h3 id="delegate-projects-heading">Shared projects</h3>
-          <div className="delegate-project-grid">
-            {projects.map((project) => (
-              <article className="delegate-card" key={project.id}>
-                <p className="eyebrow">{project.accessRole.replaceAll("_", " ")}</p>
-                <h4>{project.name}</h4>
-                {project.description === null ? null : <p>{project.description}</p>}
-                {project.delegationNote === null ? null : (
-                  <p>
-                    <strong>Owner instruction:</strong> {project.delegationNote}
-                  </p>
-                )}
-                <button
-                  className="secondary compact"
-                  onClick={() => {
-                    setExpandedProjectId((current) => (current === project.id ? null : project.id));
-                  }}
-                  type="button"
-                >
-                  {expandedProjectId === project.id
-                    ? "Close project collaboration"
-                    : "Open project collaboration"}
-                </button>
-                {expandedProjectId === project.id ? (
-                  <DelegateSubjectDetails
-                    notes={project.notes}
-                    subjectId={project.id}
-                    subjectType="project"
-                  />
-                ) : null}
-                {project.accessRole === "project_collaborator" ? (
-                  <form
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      const form = event.currentTarget;
-                      const data = new FormData(form);
-                      void workspaceRequest(`/api/delegate/projects/${project.id}/tasks`, "POST", {
-                        allocatedHours:
-                          formText(data.get("allocatedHours")).length === 0
-                            ? null
-                            : Number(data.get("allocatedHours")),
-                        definitionOfDone: formText(data.get("definitionOfDone")).trim() || null,
-                        description: formText(data.get("description")).trim() || null,
-                        title: data.get("title"),
-                      })
-                        .then(async () => {
-                          form.reset();
-                          await refresh();
-                          setMessage("Task created in the shared project.");
-                        })
-                        .catch((error: unknown) => {
-                          setMessage(
-                            error instanceof Error ? error.message : "Unable to create the task.",
-                          );
-                        });
-                    }}
-                  >
-                    <h5>Create project task</h5>
-                    <input aria-label="Task title" name="title" placeholder="Task title" required />
-                    <textarea
-                      aria-label="Task description"
-                      name="description"
-                      placeholder="Description"
-                      rows={2}
-                    />
-                    <input
-                      aria-label="Allocated hours"
-                      min="0"
-                      name="allocatedHours"
-                      placeholder="Hours"
-                      step="0.25"
-                      type="number"
-                    />
-                    <textarea
-                      aria-label="Definition of done"
-                      name="definitionOfDone"
-                      placeholder="Definition of done"
-                      rows={2}
-                    />
-                    <button className="secondary compact" type="submit">
-                      Create task
-                    </button>
-                  </form>
-                ) : null}
-              </article>
+          <h3 id="delegate-projects-heading">Project Kanban</h3>
+          <p>Project clearance includes every linked task shown in the Task Kanban below.</p>
+          <div className="delegate-board delegate-project-board">
+            {projectColumns.map((column) => (
+              <section
+                className="delegate-column"
+                key={column.id}
+                style={{ borderTopColor: column.color }}
+              >
+                <header>
+                  <h4>{column.name}</h4>
+                  <span>
+                    {
+                      projects.filter((project) => (project.stageId ?? "unassigned") === column.id)
+                        .length
+                    }
+                  </span>
+                </header>
+                <div className="delegate-card-list">
+                  {projects
+                    .filter((project) => (project.stageId ?? "unassigned") === column.id)
+                    .map((project) => (
+                      <article className="delegate-card" key={project.id}>
+                        <p className="eyebrow">{project.accessRole.replaceAll("_", " ")}</p>
+                        <h4>{project.name}</h4>
+                        <p className="muted">
+                          {project.taskCount} linked task(s) included in your clearance
+                        </p>
+                        {project.description === null ? null : <p>{project.description}</p>}
+                        {project.delegationNote === null ? null : (
+                          <p>
+                            <strong>Owner instruction:</strong> {project.delegationNote}
+                          </p>
+                        )}
+                        <button
+                          className="secondary compact"
+                          onClick={() => {
+                            setExpandedProjectId((current) =>
+                              current === project.id ? null : project.id,
+                            );
+                          }}
+                          type="button"
+                        >
+                          {expandedProjectId === project.id
+                            ? "Close project collaboration"
+                            : "Open project collaboration"}
+                        </button>
+                        {expandedProjectId === project.id ? (
+                          <DelegateSubjectDetails
+                            notes={project.notes}
+                            subjectId={project.id}
+                            subjectType="project"
+                          />
+                        ) : null}
+                        {project.accessRole === "project_collaborator" ? (
+                          <form
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              const form = event.currentTarget;
+                              const data = new FormData(form);
+                              void workspaceRequest(
+                                `/api/delegate/projects/${project.id}/tasks`,
+                                "POST",
+                                {
+                                  allocatedHours:
+                                    formText(data.get("allocatedHours")).length === 0
+                                      ? null
+                                      : Number(data.get("allocatedHours")),
+                                  definitionOfDone:
+                                    formText(data.get("definitionOfDone")).trim() || null,
+                                  description: formText(data.get("description")).trim() || null,
+                                  title: data.get("title"),
+                                },
+                              )
+                                .then(async () => {
+                                  form.reset();
+                                  await refresh();
+                                  setMessage("Task created in the shared project.");
+                                })
+                                .catch((error: unknown) => {
+                                  setMessage(
+                                    error instanceof Error
+                                      ? error.message
+                                      : "Unable to create the task.",
+                                  );
+                                });
+                            }}
+                          >
+                            <h5>Create project task</h5>
+                            <input
+                              aria-label="Task title"
+                              name="title"
+                              placeholder="Task title"
+                              required
+                            />
+                            <textarea
+                              aria-label="Task description"
+                              name="description"
+                              placeholder="Description"
+                              rows={2}
+                            />
+                            <input
+                              aria-label="Allocated hours"
+                              min="0"
+                              name="allocatedHours"
+                              placeholder="Hours"
+                              step="0.25"
+                              type="number"
+                            />
+                            <textarea
+                              aria-label="Definition of done"
+                              name="definitionOfDone"
+                              placeholder="Definition of done"
+                              rows={2}
+                            />
+                            <button className="secondary compact" type="submit">
+                              Create task
+                            </button>
+                          </form>
+                        ) : null}
+                      </article>
+                    ))}
+                </div>
+              </section>
             ))}
           </div>
         </section>
       ) : null}
+      <div className="section-heading-row delegate-task-heading">
+        <div>
+          <h3>Task Kanban</h3>
+          <p>Assigned, In progress, and Done are your starting stages. Rename or extend them.</p>
+        </div>
+      </div>
       <div className="delegate-board">
         {activeStages.map((stage) => (
           <section
@@ -262,7 +350,18 @@ export const DelegateWorkspace = ({
             style={{ borderTopColor: stage.color }}
           >
             <header>
-              <h3>{stage.name}</h3>
+              <div>
+                <h3>{stage.name}</h3>
+                <button
+                  aria-label={`Rename ${stage.name} stage`}
+                  className="icon-button compact"
+                  onClick={() => void renameStage(stage)}
+                  title="Rename stage"
+                  type="button"
+                >
+                  ✎
+                </button>
+              </div>
               <span>{tasks.filter((task) => task.stageId === stage.id).length}</span>
             </header>
             <div className="delegate-card-list">
@@ -275,6 +374,9 @@ export const DelegateWorkspace = ({
                     ) : null}
                     <h4>{task.title}</h4>
                     <div className="delegate-card-meta">
+                      <span>
+                        {task.assigned ? "Assigned to you" : "Visible through project clearance"}
+                      </span>
                       <span>{task.accessRole.replaceAll("_", " ")}</span>
                       <span>
                         {task.hoursSpent}h / {task.allocatedHours ?? "—"}h
