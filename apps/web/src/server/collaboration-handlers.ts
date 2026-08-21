@@ -16,6 +16,7 @@ import {
   readCookie,
 } from "./request-security";
 import { getCollaborationStore, getStore, logger } from "./runtime";
+import { canonicalPublicOrigin } from "./public-origin";
 
 const json = (body: unknown, status = 200, headers?: HeadersInit) =>
   Response.json(body, { status, ...(headers === undefined ? {} : { headers }) });
@@ -72,7 +73,7 @@ export const delegationsHandler = (request: Request) =>
     assertSameOrigin(request);
     await auth().consumeSensitiveAction(session.userId);
     return json(
-      await service.create(session, await body(request), new URL(request.url).origin),
+      await service.create(session, await body(request), canonicalPublicOrigin(request)),
       201,
     );
   });
@@ -91,7 +92,7 @@ export const delegationHandler = (request: Request, grantIdValue: string) =>
       session,
       grantId,
       await body(request),
-      new URL(request.url).origin,
+      canonicalPublicOrigin(request),
     );
     return json("replaced" in updated ? updated : { grant: updated });
   });
@@ -104,7 +105,7 @@ export const resendDelegationHandler = (request: Request, grantIdValue: string) 
     const result = await new DelegationService(getCollaborationStore()).resend(
       session,
       entityIdSchema.parse(grantIdValue),
-      new URL(request.url).origin,
+      canonicalPublicOrigin(request),
     );
     return json(result);
   });
@@ -190,6 +191,24 @@ export const collaborationSettingsHandler = (request: Request) =>
     assertSameOrigin(request);
     await service.updateFlags(session, await body(request));
     return json({ flags: await service.flags(session) });
+  });
+
+export const collaborationRuntimeHandler = (request: Request) =>
+  run(async () => {
+    const session = await requirePrincipal(request);
+    return json(await new DelegationService(getCollaborationStore()).runtimeConfiguration(session));
+  });
+
+export const collaborationEmailSettingsHandler = (request: Request) =>
+  run(async () => {
+    assertSameOrigin(request);
+    const session = await requirePrincipal(request);
+    const service = new DelegationService(getCollaborationStore());
+    if (request.method === "DELETE") {
+      await service.deleteEmailConfiguration(session);
+      return json(await service.runtimeConfiguration(session));
+    }
+    return json(await service.saveEmailConfiguration(session, await body(request)));
   });
 
 export const userLifecycleHandler = (request: Request, userIdValue: string) =>

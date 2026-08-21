@@ -24,6 +24,9 @@ Copy `.env.example` to `.env`. The local file is ignored and the repository vali
 | `EMAIL_DELIVERY_WEBHOOK_TOKEN`        |                   Optional |    Yes | Bearer credential for the email delivery adapter                    |
 | `ATTACHMENT_SCANNER_ENDPOINT`         |           Delegate uploads |     No | Fail-closed multipart malware-scanning endpoint                     |
 | `ATTACHMENT_SCANNER_TOKEN`            |                   Optional |    Yes | Bearer credential for the malware scanner                           |
+| `CLAMAV_HOST`                         |           Delegate uploads |     No | Host for a private ClamAV `clamd` service                           |
+| `CLAMAV_PORT`                         |                   Optional |     No | Private `clamd` TCP port; defaults to `3310`                        |
+| `OPSWEAVE_CLAMAV_PORT`                |                   Optional |     No | Loopback host port published by the Compose ClamAV service          |
 | `AI_CREDENTIAL_MASTER_KEY`            | Settings credential writes |    Yes | Base64-encoded 32-byte authenticated-encryption key                 |
 | `AI_CREDENTIAL_MASTER_KEY_VERSION`    | Settings credential writes |     No | Positive envelope key version                                       |
 
@@ -33,7 +36,8 @@ Copy `.env.example` to `.env`. The local file is ignored and the repository vali
 - Do not use production values in local development or tests.
 - Keep the AI master key outside PostgreSQL and back it up separately.
 - Keep the invitation encryption key identical in the web and worker secret stores. Do not rotate it while invitation emails are queued.
-- Do not enable delegate uploads until a real malware scanner endpoint is configured; missing or failed scans reject the upload before storage.
+- The included official ClamAV service publishes `clamd` on loopback only. Set `CLAMAV_HOST=127.0.0.1` for host-run web deployments. `clamd` has no TCP authentication, so never expose its port publicly.
+- Do not enable delegate uploads until ClamAV or a scanner webhook is configured; missing or failed scans reject the upload before storage.
 - Generate a separate random rate-limit pepper of at least 32 characters.
 - Standard validation uses random or clearly synthetic credentials and a deterministic fake provider.
 - A live provider check must be explicit, use synthetic content, and stay outside required CI.

@@ -135,6 +135,8 @@ export const delegationCreateSchema = z
     anonymise: z.boolean().default(false),
     delegateEmail: emailSchema,
     delegationNote: z.string().trim().max(4_000).nullable().default(null),
+    privacyKeywords: z.array(z.string().trim().min(2).max(500)).max(100).default([]),
+    profileDescription: z.string().trim().max(1_000).nullable().default(null),
     expiresAt: z.iso.datetime().nullable().default(null),
     subjectId: z.uuid(),
     subjectType: z.enum(ACCESS_SUBJECT_TYPES),
@@ -161,6 +163,8 @@ export const delegationUpdateSchema = z
     accessRole: z.enum(ACCESS_ROLES).optional(),
     delegateEmail: emailSchema.optional(),
     delegationNote: z.string().trim().max(4_000).nullable().optional(),
+    privacyKeywords: z.array(z.string().trim().min(2).max(500)).max(100).optional(),
+    profileDescription: z.string().trim().max(1_000).nullable().optional(),
     expiresAt: z.iso.datetime().nullable().optional(),
     version: z.number().int().positive(),
   })
@@ -249,6 +253,23 @@ export const collaborationFlagsSchema = z.object({
   invitationEmailEnabled: z.boolean(),
   multiUserEnabled: z.boolean(),
 });
+
+export const emailDeliveryConfigurationSchema = z
+  .object({
+    endpoint: z.url().max(2_048),
+    token: z.string().max(4_000).optional(),
+  })
+  .superRefine((value, context) => {
+    const endpoint = new URL(value.endpoint);
+    const loopback = ["127.0.0.1", "localhost", "::1"].includes(endpoint.hostname);
+    if (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && loopback)) {
+      context.addIssue({
+        code: "custom",
+        message: "Email delivery endpoints must use HTTPS.",
+        path: ["endpoint"],
+      });
+    }
+  });
 
 export const ATTACHMENT_VISIBILITIES = [
   "internal_only",

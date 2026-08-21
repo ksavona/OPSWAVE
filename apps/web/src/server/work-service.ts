@@ -22,7 +22,12 @@ import {
   type KanbanSortMode,
 } from "@opsweave/domain";
 import { DeterministicFakeAiProvider, OpenAiProvider } from "@opsweave/ai";
-import { StoreConflictError, type OpsWeaveStore, type SessionRecord } from "@opsweave/db";
+import {
+  StoreConflictError,
+  type CollaborationStore,
+  type OpsWeaveStore,
+  type SessionRecord,
+} from "@opsweave/db";
 
 import { readAttachmentFile, readAttachmentTextContext } from "./attachment-storage";
 
@@ -66,19 +71,23 @@ const conflict = async <T>(operation: () => Promise<T>): Promise<T> => {
 };
 
 export class WorkService {
-  public constructor(private readonly store: OpsWeaveStore) {}
+  public constructor(
+    private readonly store: OpsWeaveStore,
+    private readonly collaboration?: Pick<CollaborationStore, "listDelegationBadges">,
+  ) {}
 
   public async readWorkspace(session: SessionRecord, requestedSort?: unknown) {
     const query = boardQuerySchema.parse({ sort: requestedSort });
     const configuration = await this.store.getWorkspaceConfiguration(session.workspaceId);
     const sort: KanbanSortMode = query.sort ?? configuration.general.defaultKanbanSort;
-    const [projects, stages, storedTasks, entityDependencies, projectDirectTime] =
+    const [projects, stages, storedTasks, entityDependencies, projectDirectTime, delegations] =
       await Promise.all([
         this.store.listProjects(session.workspaceId),
         this.store.listProjectStages(session.workspaceId),
         this.store.listTasks(session.workspaceId, sort),
         this.store.listEntityDependencies(session.workspaceId),
         this.store.listProjectDirectTimeTotals(session.workspaceId),
+        this.collaboration?.listDelegationBadges(session.workspaceId) ?? Promise.resolve([]),
       ]);
     const dependencies = entityDependencies.flatMap((dependency) =>
       dependency.dependentType === "task" && dependency.blockerType === "task"
@@ -141,6 +150,7 @@ export class WorkService {
       blockerCounts,
       clientNames,
       dependencies,
+      delegations,
       entityDependencies,
       projectDependencies,
       projectMetrics,

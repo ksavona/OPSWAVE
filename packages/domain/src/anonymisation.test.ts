@@ -4,6 +4,7 @@ import {
   containsProtectedTerm,
   createDelegationAlias,
   findProtectedContactMatches,
+  redactProtectedContent,
 } from "./anonymisation.ts";
 
 describe("delegation anonymisation", () => {
@@ -22,5 +23,18 @@ describe("delegation anonymisation", () => {
 
   it("matches owner-provided protected terms case-insensitively", () => {
     expect(containsProtectedTerm("Work for ACME Limited", ["Acme Limited"])).toBe(true);
+  });
+
+  it("redacts generic contact details and literal owner privacy terms", () => {
+    const result = redactProtectedContent(
+      "Email david@example.test, visit https://david.example, or ask for David Collins.",
+      ["David Collins"],
+    );
+    expect(result.redacted).toBe(
+      "Email [REDACTED CONTACT], visit [REDACTED CONTACT] or ask for [REDACTED PRIVATE DETAIL].",
+    );
+    expect(result.matches).toEqual(
+      expect.arrayContaining(["david@example.test", "https://david.example,", "David Collins"]),
+    );
   });
 });

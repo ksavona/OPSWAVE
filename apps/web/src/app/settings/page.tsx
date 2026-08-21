@@ -2,21 +2,28 @@ import Link from "next/link";
 
 import { LogoutButton } from "../../components/logout-button";
 import { SettingsWorkspace } from "../../components/settings-workspace";
-import { getCurrentSession } from "../../server/current-session";
+import { getCurrentPrincipal, getCurrentSession } from "../../server/current-session";
 import { getCollaborationStore, getStore } from "../../server/runtime";
 import { SettingsService } from "../../server/settings-service";
+import { DelegationService } from "../../server/delegation-service";
 
 export default async function SettingsPage() {
   const session = await getCurrentSession();
+  const principal = await getCurrentPrincipal();
   const store = getStore();
-  const [data, stages, collaboration] = await Promise.all([
+  const collaborationStore = getCollaborationStore();
+  const [data, stages, collaboration, collaborationRuntime] = await Promise.all([
     new SettingsService(store).read(session),
     store.listProjectStages(session.workspaceId),
-    getCollaborationStore().getCollaborationFlags(session.workspaceId),
+    collaborationStore.getCollaborationFlags(session.workspaceId),
+    new DelegationService(collaborationStore).runtimeConfiguration(principal),
   ]);
   const serializable = JSON.parse(JSON.stringify(data)) as Parameters<
     typeof SettingsWorkspace
   >[0]["initial"];
+  const serializableCollaborationRuntime = JSON.parse(
+    JSON.stringify(collaborationRuntime),
+  ) as NonNullable<Parameters<typeof SettingsWorkspace>[0]["initialCollaborationRuntime"]>;
   return (
     <main className="app-page">
       <header className="app-header">
@@ -34,6 +41,7 @@ export default async function SettingsPage() {
       <SettingsWorkspace
         initial={serializable}
         initialCollaboration={collaboration}
+        initialCollaborationRuntime={serializableCollaborationRuntime}
         stages={
           JSON.parse(JSON.stringify(stages)) as NonNullable<
             Parameters<typeof SettingsWorkspace>[0]["stages"]

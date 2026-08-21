@@ -7,6 +7,7 @@ import {
   delegatePresentationSchema,
   delegationCreateSchema,
   delegationUpdateSchema,
+  emailDeliveryConfigurationSchema,
   taskDelegateSharingSchema,
 } from "@opsweave/domain";
 import {
@@ -17,6 +18,7 @@ import {
 
 import { AuthorizationService } from "./authorization-service";
 import { encryptInvitationPayload, isInvitationEncryptionAvailable } from "./invitation-crypto";
+import { malwareScannerStatus } from "./malware-scanner";
 
 const INVITATION_LIFETIME_MS = 72 * 60 * 60 * 1_000;
 const tokenDigest = (token: string): string => createHash("sha256").update(token).digest("hex");
@@ -128,11 +130,94 @@ export class DelegationService {
 
   public async updateFlags(session: PrincipalSessionRecord, value: unknown): Promise<void> {
     const principal = this.authorization.requireOwnerOrAdmin(session);
-    await this.store.updateCollaborationFlags(
-      principal.workspaceId,
-      principal.userId,
-      collaborationFlagsSchema.parse(value),
-    );
+    const input = collaborationFlagsSchema.parse(value);
+    if (input.invitationEmailEnabled) {
+      const storedEmail = await this.store.getEmailDeliveryConfiguration(principal.workspaceId);
+      const environmentEmail = (process.env.EMAIL_DELIVERY_WEBHOOK_URL?.length ?? 0) > 0;
+      if (!isInvitationEncryptionAvailable() || (!environmentEmail && !storedEmail.configured)) {
+        throw new SafeApplicationError(
+          "configuration_error",
+          "Configure invitation encryption and email delivery before enabling invitation emails.",
+          400,
+        );
+      }
+    }
+    if (input.delegateUploadsEnabled && !malwareScannerStatus().configured) {
+      throw new SafeApplicationError(
+        "configuration_error",
+        "Configure the malware scanner before enabling delegate uploads.",
+        400,
+      );
+    }
+    await this.store.updateCollaborationFlags(principal.workspaceId, principal.userId, input);
+  }
+
+  public async runtimeConfiguration(session: PrincipalSessionRecord) {
+    const principal = this.authorization.requireOwnerOrAdmin(session);
+    const storedEmail = await this.store.getEmailDeliveryConfiguration(principal.workspaceId);
+    const environmentEndpoint = process.env.EMAIL_DELIVERY_WEBHOOK_URL?.trim();
+    const publicBaseUrl = process.env.APP_BASE_URL?.trim();
+    return {
+      email: environmentEndpoint
+        ? {
+            configured: true,
+            endpoint: environmentEndpoint,
+            source: "environment" as const,
+            tokenConfigured: (process.env.EMAIL_DELIVERY_WEBHOOK_TOKEN?.length ?? 0) > 0,
+            updatedAt: null,
+          }
+        : { ...storedEmail, source: "settings" as const },
+      invitationEncryptionReady: isInvitationEncryptionAvailable(),
+      malwareScanner: malwareScannerStatus(),
+      publicBaseUrl:
+        publicBaseUrl === undefined || publicBaseUrl.length === 0 ? null : publicBaseUrl,
+    };
+  }
+
+  public async saveEmailConfiguration(session: PrincipalSessionRecord, value: unknown) {
+    const principal = this.authorization.requireOwnerOrAdmin(session);
+    if ((process.env.EMAIL_DELIVERY_WEBHOOK_URL?.length ?? 0) > 0) {
+      throw new SafeApplicationError(
+        "conflict",
+        "Email delivery is managed by the deployment environment.",
+        409,
+      );
+    }
+    const input = emailDeliveryConfigurationSchema.parse(value);
+    const token = input.token?.trim();
+    let encryptedToken: string | undefined;
+    if (token !== undefined && token.length > 0) {
+      encryptedToken = encryptInvitationPayload(token) ?? undefined;
+      if (encryptedToken === undefined) {
+        throw new SafeApplicationError(
+          "configuration_error",
+          "Configure INVITATION_LINK_ENCRYPTION_KEY before saving an email token.",
+          503,
+        );
+      }
+    }
+    await this.store.saveEmailDeliveryConfiguration({
+      actorUserId: principal.userId,
+      ...(encryptedToken === undefined ? {} : { encryptedToken }),
+      endpoint: input.endpoint,
+      workspaceId: principal.workspaceId,
+    });
+    return this.runtimeConfiguration(session);
+  }
+
+  public async deleteEmailConfiguration(session: PrincipalSessionRecord): Promise<void> {
+    const principal = this.authorization.requireOwnerOrAdmin(session);
+    if ((process.env.EMAIL_DELIVERY_WEBHOOK_URL?.length ?? 0) > 0) {
+      throw new SafeApplicationError(
+        "conflict",
+        "Email delivery is managed by the deployment environment.",
+        409,
+      );
+    }
+    await this.store.deleteEmailDeliveryConfiguration({
+      actorUserId: principal.userId,
+      workspaceId: principal.workspaceId,
+    });
   }
 
   public async create(session: PrincipalSessionRecord, value: unknown, origin: string) {
@@ -149,6 +234,8 @@ export class DelegationService {
         anonymise: input.anonymise,
         delegateEmail: input.delegateEmail,
         delegationNote: input.delegationNote,
+        privacyKeywords: input.privacyKeywords,
+        profileDescription: input.profileDescription,
         encryptedInvitationPayload: encryptInvitationPayload(
           JSON.stringify({ invitationUrl, version: 1 }),
         ),
@@ -203,6 +290,12 @@ export class DelegationService {
           workspaceId: principal.workspaceId,
           ...(input.accessRole === undefined ? {} : { accessRole: input.accessRole }),
           ...(input.delegationNote === undefined ? {} : { delegationNote: input.delegationNote }),
+          ...(input.privacyKeywords === undefined
+            ? {}
+            : { privacyKeywords: input.privacyKeywords }),
+          ...(input.profileDescription === undefined
+            ? {}
+            : { profileDescription: input.profileDescription }),
           ...(input.expiresAt === undefined
             ? {}
             : { expiresAt: input.expiresAt === null ? null : new Date(input.expiresAt) }),
@@ -232,6 +325,10 @@ export class DelegationService {
       workspaceId: principal.workspaceId,
       ...(input.accessRole === undefined ? {} : { accessRole: input.accessRole }),
       ...(input.delegationNote === undefined ? {} : { delegationNote: input.delegationNote }),
+      ...(input.privacyKeywords === undefined ? {} : { privacyKeywords: input.privacyKeywords }),
+      ...(input.profileDescription === undefined
+        ? {}
+        : { profileDescription: input.profileDescription }),
       ...(input.expiresAt === undefined
         ? {}
         : { expiresAt: input.expiresAt === null ? null : new Date(input.expiresAt) }),

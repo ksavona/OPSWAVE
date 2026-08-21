@@ -54,6 +54,7 @@ describe("database migrations and repositories", () => {
         "delegate_kanban_stages",
         "delegate_task_states",
         "delegation_aliases",
+        "email_delivery_settings",
         "invitation_tokens",
         "notification_outbox",
         "notifications",
@@ -132,7 +133,7 @@ describe("database migrations and repositories", () => {
       delegationNote: "Complete the isolated fixture.",
       encryptedInvitationPayload: null,
       expiresAt: new Date("2026-09-01T00:00:00.000Z"),
-      invitationExpiresAt: new Date("2026-08-20T00:00:00.000Z"),
+      invitationExpiresAt: new Date("2030-08-20T00:00:00.000Z"),
       invitationTokenDigest: digest,
       subjectId: task.id,
       subjectType: "task",
@@ -1684,6 +1685,92 @@ describe("database migrations and repositories", () => {
     expect(await store.recoverStaleIntakeRuns(new Date("2026-08-01T01:00:00.000Z"))).toBe(1);
     expect((await store.nextQueuedIntakeRun())?.id).toBe(restartRun.id);
     await store.failIntakeRun(restartRun.id, "Synthetic cleanup failure.");
+  });
+
+  it("stores delegate profiles, filters legacy Kanban events, and purges closed grants after 30 days", async () => {
+    const owner = await store.findUserForLogin("synthetic-owner");
+    if (owner?.ownerId === null || owner?.ownerId === undefined)
+      throw new Error("Expected unified owner.");
+    const task = await store.createTask(owner.workspaceId, owner.ownerId, {
+      allocatedHours: 1,
+      title: "UAT collaboration retention fixture",
+      workflowLane: "inbox",
+    });
+    const token = `uat-profile-${randomUUID()}`;
+    const created = await collaboration.createAccessGrant({
+      accessRole: "contributor",
+      actorUserId: owner.userId,
+      delegateEmail: "profile-uat@example.test",
+      delegationNote: "Complete the UAT fixture.",
+      encryptedInvitationPayload: null,
+      expiresAt: null,
+      invitationExpiresAt: new Date(Date.now() + 72 * 60 * 60 * 1_000),
+      invitationTokenDigest: createHash("sha256").update(token).digest("hex"),
+      privacyKeywords: ["+44 20 7946 0991", "private-profile.example"],
+      profileDescription: "Senior developer responsible for UAT and feature requests.",
+      subjectId: task.id,
+      subjectType: "task",
+      workspaceId: owner.workspaceId,
+    });
+    expect(created.grant).toMatchObject({
+      privacyKeywords: ["+44 20 7946 0991", "private-profile.example"],
+      profileDescription: "Senior developer responsible for UAT and feature requests.",
+    });
+    expect(await collaboration.listDelegationBadges(owner.workspaceId)).toContainEqual(
+      expect.objectContaining({
+        delegates: [
+          expect.objectContaining({
+            profileDescription: "Senior developer responsible for UAT and feature requests.",
+          }),
+        ],
+        subjectId: task.id,
+        subjectType: "task",
+      }),
+    );
+    expect(
+      await collaboration.listProtectedTermValues(owner.workspaceId, "task", task.id, false),
+    ).toEqual(expect.arrayContaining(["private-profile.example", "+44 20 7946 0991"]));
+
+    await store.moveTask(owner.workspaceId, owner.ownerId, task.id, "today", task.version);
+    expect(
+      await collaboration.listActivity({
+        category: "status",
+        subjectId: task.id,
+        subjectType: "task",
+        viewerRole: "owner",
+        viewerUserId: owner.userId,
+        workspaceId: owner.workspaceId,
+      }),
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ action: "task.moved" })]));
+
+    await collaboration.saveEmailDeliveryConfiguration({
+      actorUserId: owner.userId,
+      encryptedToken: "synthetic-encrypted-token",
+      endpoint: "https://mailer.example.test/opsweave",
+      workspaceId: owner.workspaceId,
+    });
+    expect(await collaboration.getEmailDeliveryConfiguration(owner.workspaceId)).toMatchObject({
+      configured: true,
+      endpoint: "https://mailer.example.test/opsweave",
+      tokenConfigured: true,
+    });
+
+    await collaboration.revokeAccessGrant(owner.workspaceId, owner.userId, created.grant.id);
+    await pool.query(
+      `UPDATE opsweave.access_grants SET revoked_at=now()-interval '31 days',
+        updated_at=now()-interval '31 days' WHERE id=$1`,
+      [created.grant.id],
+    );
+    expect(await collaboration.purgeClosedAccessGrants(30)).toBeGreaterThanOrEqual(1);
+    expect(
+      await pool.query("SELECT id FROM opsweave.access_grants WHERE id=$1", [created.grant.id]),
+    ).toMatchObject({ rowCount: 0 });
+    const retainedAudit = await pool.query(
+      `SELECT id FROM opsweave.audit_events
+       WHERE metadata->>'grantId'=$1 OR metadata->>'previousGrantId'=$1`,
+      [created.grant.id],
+    );
+    expect(retainedAudit.rowCount).toBeGreaterThan(0);
   });
 
   it("recovers credentials, revokes sessions, and preserves operational data", async () => {

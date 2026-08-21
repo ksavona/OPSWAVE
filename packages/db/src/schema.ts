@@ -642,6 +642,11 @@ export const accessGrants = opsweaveSchema.table(
     }),
     revokedAt: timestamp("revoked_at", { mode: "date", withTimezone: true }),
     delegationNote: text("delegation_note"),
+    profileDescription: text("profile_description"),
+    privacyKeywords: text("privacy_keywords")
+      .array()
+      .notNull()
+      .default(sql`ARRAY[]::text[]`),
     version: integer("version").notNull().default(1),
     ...timestamps,
   },
@@ -683,6 +688,18 @@ export const accessGrants = opsweaveSchema.table(
     check("access_grants_version_positive", sql`${table.version} > 0`),
   ],
 );
+
+export const emailDeliverySettings = opsweaveSchema.table("email_delivery_settings", {
+  workspaceId: uuid("workspace_id")
+    .primaryKey()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  endpoint: varchar("endpoint", { length: 2_048 }).notNull(),
+  encryptedToken: text("encrypted_token"),
+  configuredByUserId: uuid("configured_by_user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "restrict" }),
+  ...timestamps,
+});
 
 export const invitationTokens = opsweaveSchema.table(
   "invitation_tokens",

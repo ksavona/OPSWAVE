@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 export interface MermaidEntityTarget {
+  delegates?: readonly {
+    alias: string | null;
+    displayName: string;
+    profileDescription: string | null;
+  }[];
   entityId: string;
   entityType: "project" | "task";
   mermaidId: string;
@@ -113,6 +118,8 @@ export const MermaidDiagram = ({
     const container = viewport.current;
     if (container === null || svg.length === 0) return;
     for (const element of container.querySelectorAll<SVGElement>("[id]")) {
+      element.querySelector(":scope > .mermaid-delegation-badge")?.remove();
+      element.querySelector(":scope > title[data-opsweave-delegations]")?.remove();
       delete element.dataset.opsweaveEntityId;
       delete element.dataset.opsweaveEntityType;
       element.classList.remove("mermaid-entity-link");
@@ -134,6 +141,33 @@ export const MermaidDiagram = ({
       element.classList.add("mermaid-entity-link");
       element.setAttribute("role", "button");
       element.setAttribute("tabindex", "0");
+      const delegates = entity.delegates ?? [];
+      if (delegates.length > 0 && element instanceof SVGGElement) {
+        const namespace = "http://www.w3.org/2000/svg";
+        const title = document.createElementNS(namespace, "title");
+        title.dataset.opsweaveDelegations = "true";
+        title.textContent = `Delegated to ${delegates
+          .map((delegate) =>
+            [delegate.displayName, delegate.alias, delegate.profileDescription]
+              .filter((value) => value !== null && value.length > 0)
+              .join(" · "),
+          )
+          .join("; ")}`;
+        element.prepend(title);
+        if (element.classList.contains("node")) {
+          const box = element.getBBox();
+          const badge = document.createElementNS(namespace, "g");
+          badge.classList.add("mermaid-delegation-badge");
+          badge.setAttribute(
+            "transform",
+            `translate(${String(box.x + box.width - 18)} ${String(box.y + 6)})`,
+          );
+          badge.setAttribute("aria-hidden", "true");
+          badge.innerHTML =
+            '<circle cx="5" cy="4" r="3"/><circle cx="11" cy="5" r="2.5"/><path d="M0 13c0-3 2-5 5-5s5 2 5 5M8 13c.2-2.4 1.7-4 4-4 2.5 0 4 1.7 4 4" fill="none" stroke="currentColor" stroke-width="1.6"/>';
+          element.append(badge);
+        }
+      }
     }
   }, [entities, svg]);
 

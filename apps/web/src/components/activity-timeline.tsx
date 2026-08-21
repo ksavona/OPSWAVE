@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import type { WorkspaceData, WorkflowLane } from "./workspace-types";
 import { WORKFLOW_LANES, workflowLaneLabel } from "./workspace-types";
 import { workspaceRequest } from "./workspace-api";
+import { DelayedTooltip } from "./delayed-tooltip";
 
 interface ActivityEventView {
   action: string;
@@ -22,6 +23,7 @@ interface ActivityEventView {
 interface ParticipantView {
   alias: string | null;
   displayName: string;
+  profileDescription: string | null;
   userId: string;
 }
 
@@ -190,7 +192,16 @@ export const ActivityTimeline = ({
                   }}
                   type="checkbox"
                 />
-                {participant.displayName}
+                {participant.profileDescription === null ? (
+                  participant.displayName
+                ) : (
+                  <DelayedTooltip
+                    content={participant.profileDescription}
+                    label={participant.displayName}
+                  >
+                    <span>{participant.displayName}</span>
+                  </DelayedTooltip>
+                )}
               </label>
             ))}
           </fieldset>

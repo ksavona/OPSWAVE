@@ -16,6 +16,7 @@ import { ProjectEditor, TaskEditor } from "./entity-editors";
 import { GanttChart } from "./gantt-chart";
 import { KanbanBoard } from "./kanban-board";
 import { MermaidDiagram } from "./mermaid-diagram";
+import { DelegationIndicator, type DelegateTooltipView } from "./delayed-tooltip";
 import {
   WORKFLOW_LANES,
   WORK_STATUSES,
@@ -361,6 +362,7 @@ export const Workspace = ({
         <ProjectBoard
           clientNames={data.clientNames ?? []}
           condensed={projectCondensed}
+          delegations={data.delegations ?? []}
           metrics={data.projectMetrics}
           onChanged={refresh}
           onOpen={(project) => {
@@ -428,6 +430,7 @@ export const Workspace = ({
         <TaskBoard
           clientNames={data.clientNames ?? []}
           condensed={taskCondensed}
+          delegations={data.delegations ?? []}
           onChanged={refresh}
           onOpen={(task) => {
             setMessage("");
@@ -451,6 +454,7 @@ export const Workspace = ({
           </div>
         </div>
         <GanttChart
+          delegations={data.delegations ?? []}
           onChanged={refresh}
           onOpenEntity={({ id, type }) => {
             setMessage("");
@@ -636,6 +640,7 @@ const ProjectForm = ({
 const ProjectBoard = ({
   clientNames,
   condensed,
+  delegations,
   metrics,
   onChanged,
   onOpen,
@@ -648,6 +653,7 @@ const ProjectBoard = ({
 }: {
   clientNames: string[];
   condensed: boolean;
+  delegations: NonNullable<WorkspaceData["delegations"]>;
   metrics: Record<string, ProjectMetrics>;
   onChanged: () => Promise<void>;
   onOpen: (project: Project) => void;
@@ -764,6 +770,12 @@ const ProjectBoard = ({
                   <div className="kanban-lane-content">
                     {stageProjects.map((project) => (
                       <ProjectCard
+                        delegates={
+                          delegations.find(
+                            (item) =>
+                              item.subjectType === "project" && item.subjectId === project.id,
+                          )?.delegates ?? []
+                        }
                         key={project.id}
                         metrics={metrics[project.id]}
                         onOpen={onOpen}
@@ -786,6 +798,7 @@ const ProjectBoard = ({
 };
 
 const ProjectCard = ({
+  delegates,
   metrics,
   onOpen,
   onSelect,
@@ -793,6 +806,7 @@ const ProjectCard = ({
   project,
   selected,
 }: {
+  delegates: readonly DelegateTooltipView[];
   metrics: ProjectMetrics | undefined;
   onOpen: (project: Project) => void;
   onSelect: (project: Project) => void;
@@ -832,7 +846,10 @@ const ProjectCard = ({
     role="button"
     tabIndex={0}
   >
-    <h3>{project.name}</h3>
+    <div className="card-title-row">
+      <h3>{project.name}</h3>
+      <DelegationIndicator compact delegates={delegates} />
+    </div>
     <dl className="card-metrics">
       <div>
         <dt>Spent</dt>
@@ -1078,6 +1095,7 @@ const TaskForm = ({
 const TaskBoard = ({
   clientNames,
   condensed,
+  delegations,
   onChanged,
   onOpen,
   onSelect,
@@ -1089,6 +1107,7 @@ const TaskBoard = ({
 }: {
   clientNames: string[];
   condensed: boolean;
+  delegations: NonNullable<WorkspaceData["delegations"]>;
   onChanged: () => Promise<void>;
   onOpen: (task: Task) => void;
   onSelect: (task: Task) => void;
@@ -1179,6 +1198,11 @@ const TaskBoard = ({
                 <div className="kanban-lane-content">
                   {laneTasks.map((task) => (
                     <TaskCard
+                      delegates={
+                        delegations.find(
+                          (item) => item.subjectType === "task" && item.subjectId === task.id,
+                        )?.delegates ?? []
+                      }
                       key={task.id}
                       onOpen={onOpen}
                       onSelect={onSelect}
@@ -1200,12 +1224,14 @@ const TaskBoard = ({
 };
 
 const TaskCard = ({
+  delegates,
   onOpen,
   onSelect,
   onDragStart,
   selected,
   task,
 }: {
+  delegates: readonly DelegateTooltipView[];
   onOpen: (task: Task) => void;
   onSelect: (task: Task) => void;
   onDragStart: (taskId: string) => void;
@@ -1254,7 +1280,10 @@ const TaskCard = ({
       {task.delegateReviewPending ? (
         <span className="review-ready-badge">Ready for review</span>
       ) : null}
-      <h4>{task.title}</h4>
+      <div className="card-title-row">
+        <h4>{task.title}</h4>
+        <DelegationIndicator compact delegates={delegates} />
+      </div>
       <dl className="task-card-facts">
         <div>
           <dt>Value</dt>
@@ -1313,12 +1342,19 @@ const DependencyMap = ({
   );
   const entities = [
     ...data.tasks.map((task, index) => ({
+      delegates:
+        data.delegations?.find((item) => item.subjectType === "task" && item.subjectId === task.id)
+          ?.delegates ?? [],
       entityId: task.id,
       entityType: "task" as const,
       mermaidId: `task_${String(index)}`,
     })),
     ...projects.flatMap((project, index) => [
       {
+        delegates:
+          data.delegations?.find(
+            (item) => item.subjectType === "project" && item.subjectId === project.id,
+          )?.delegates ?? [],
         entityId: project.id,
         entityType: "project" as const,
         mermaidId: `project_${String(index)}`,

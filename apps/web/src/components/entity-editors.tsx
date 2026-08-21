@@ -674,12 +674,19 @@ const FocusedDependencyDiagram = ({
   const definition = dependencyMermaid(tasks, [], projects, [], edges);
   const entities = [
     ...tasks.map((task, index) => ({
+      delegates:
+        data.delegations?.find((item) => item.subjectType === "task" && item.subjectId === task.id)
+          ?.delegates ?? [],
       entityId: task.id,
       entityType: "task" as const,
       mermaidId: `task_${String(index)}`,
     })),
     ...projects.flatMap((project, index) => [
       {
+        delegates:
+          data.delegations?.find(
+            (item) => item.subjectType === "project" && item.subjectId === project.id,
+          )?.delegates ?? [],
         entityId: project.id,
         entityType: "project" as const,
         mermaidId: `project_${String(index)}`,
@@ -792,6 +799,7 @@ export const TaskEditor = ({
   setMessage: (message: string) => void;
   task: Task;
 }) => {
+  const formId = useId();
   const [active, setActive] = useState("details");
   const [allocatedHours, setAllocatedHours] = useState(task.allocatedHours);
   const [checklist, setChecklist] = useState(task.checklist);
@@ -1008,7 +1016,12 @@ export const TaskEditor = ({
       <p aria-live="polite" className="form-message entity-message">
         {message}
       </p>
-      <form className="entity-form" onSubmit={(event) => void save(event)}>
+      <form
+        className="entity-form"
+        hidden={active === "delegations"}
+        id={formId}
+        onSubmit={(event) => void save(event)}
+      >
         <div hidden={active !== "details"}>
           <div className="entity-field-grid">
             <label className="wide-field">
@@ -1439,7 +1452,7 @@ export const TaskEditor = ({
         <div hidden={active !== "documents"}>
           <DocumentsPanel entityId={task.id} entityType="task" setMessage={setMessage} />
         </div>
-        <footer className="entity-modal-footer" hidden={active === "delegations"}>
+        <footer className="entity-modal-footer">
           <button disabled={saving} type="submit">
             {saving ? "Saving…" : "Save task"}
           </button>
@@ -1473,6 +1486,14 @@ export const TaskEditor = ({
           subjectTitle={task.title}
           subjectType="task"
         />
+        <footer className="entity-modal-footer delegation-entity-footer">
+          <button disabled={saving} form={formId} type="submit">
+            {saving ? "Saving…" : "Save task"}
+          </button>
+          <button className="danger footer-delete" onClick={() => void remove()} type="button">
+            Delete task
+          </button>
+        </footer>
       </div>
     </EntityDialog>
   );
@@ -1495,6 +1516,7 @@ export const ProjectEditor = ({
   project: Project;
   setMessage: (message: string) => void;
 }) => {
+  const formId = useId();
   const [active, setActive] = useState("details");
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [notes, setNotes] = useState(project.notes);
@@ -1646,7 +1668,13 @@ export const ProjectEditor = ({
       <p aria-live="polite" className="form-message entity-message">
         {message}
       </p>
-      <form className="entity-form" onSubmit={(event) => void save(event)} ref={formRef}>
+      <form
+        className="entity-form"
+        hidden={active === "delegations"}
+        id={formId}
+        onSubmit={(event) => void save(event)}
+        ref={formRef}
+      >
         <div hidden={active !== "details"}>
           <div className="project-visual-summary">
             <SpentDonutMetric
@@ -1818,6 +1846,7 @@ export const ProjectEditor = ({
         </div>
         <div hidden={active !== "gantt"}>
           <GanttChart
+            delegations={data.delegations ?? []}
             initialMode="tasks"
             onChanged={onChanged}
             onOpenEntity={onOpenEntity}
@@ -1856,7 +1885,7 @@ export const ProjectEditor = ({
         <div hidden={active !== "documents"}>
           <DocumentsPanel entityId={project.id} entityType="project" setMessage={setMessage} />
         </div>
-        <footer className="entity-modal-footer" hidden={active === "delegations"}>
+        <footer className="entity-modal-footer">
           <button disabled={saving} type="submit">
             {saving ? "Saving…" : "Save project"}
           </button>
@@ -1872,6 +1901,14 @@ export const ProjectEditor = ({
           subjectTitle={project.name}
           subjectType="project"
         />
+        <footer className="entity-modal-footer delegation-entity-footer">
+          <button disabled={saving} form={formId} type="submit">
+            {saving ? "Saving…" : "Save project"}
+          </button>
+          <button className="danger footer-delete" onClick={() => void remove()} type="button">
+            Delete project
+          </button>
+        </footer>
       </div>
     </EntityDialog>
   );

@@ -17,6 +17,8 @@ export interface AccessGrantRecord {
   readonly delegateFullName: string | null;
   readonly delegateUserId: string | null;
   readonly delegationNote: string | null;
+  readonly privacyKeywords: readonly string[];
+  readonly profileDescription: string | null;
   readonly expiresAt: Date | null;
   readonly id: string;
   readonly invitedAt: Date;
@@ -29,6 +31,24 @@ export interface AccessGrantRecord {
   readonly taskTitle: string | null;
   readonly version: number;
   readonly workspaceId: string;
+}
+
+export interface DelegationBadgeRecord {
+  readonly delegates: readonly {
+    readonly alias: string | null;
+    readonly displayName: string;
+    readonly profileDescription: string | null;
+    readonly status: "active" | "invite_pending";
+  }[];
+  readonly subjectId: string;
+  readonly subjectType: AccessSubjectType;
+}
+
+export interface EmailDeliveryConfigurationRecord {
+  readonly configured: boolean;
+  readonly endpoint: string | null;
+  readonly tokenConfigured: boolean;
+  readonly updatedAt: Date | null;
 }
 
 export interface InvitationRecord {
@@ -179,6 +199,7 @@ export interface ActivityRecord {
 export interface SubjectParticipantRecord {
   readonly alias: string | null;
   readonly displayName: string;
+  readonly profileDescription: string | null;
   readonly userId: string;
 }
 
@@ -264,6 +285,7 @@ export interface EmailOutboxRecord {
   readonly id: string;
   readonly recipientEmail: string;
   readonly templateKey: string;
+  readonly workspaceId: string;
 }
 
 const transaction = async <T>(pool: Pool, operation: (client: PoolClient) => Promise<T>) => {
@@ -375,6 +397,8 @@ const mapGrant = (row: Record<string, unknown>): AccessGrantRecord => ({
   delegateFullName: (row.delegateFullName as string | null) ?? null,
   delegateUserId: (row.delegateUserId as string | null) ?? null,
   delegationNote: (row.delegationNote as string | null) ?? null,
+  privacyKeywords: (row.privacyKeywords as string[] | null) ?? [],
+  profileDescription: (row.profileDescription as string | null) ?? null,
   expiresAt: (row.expiresAt as Date | null) ?? null,
   id: row.id as string,
   invitedAt: row.invitedAt as Date,
@@ -393,6 +417,7 @@ const grantSelect = `SELECT access.id,access.workspace_id AS "workspaceId",
   access.subject_type AS "subjectType",coalesce(access.subject_project_id,access.subject_task_id) AS "subjectId",
   access.scope,access.access_role AS "accessRole",access.status,access.delegate_user_id AS "delegateUserId",
   access.delegate_email AS "delegateEmail",access.delegation_note AS "delegationNote",
+  access.profile_description AS "profileDescription",access.privacy_keywords AS "privacyKeywords",
   access.invited_at AS "invitedAt",access.activated_at AS "activatedAt",access.expires_at AS "expiresAt",
   access.created_at AS "createdAt",access.version,"user".full_name AS "delegateFullName",
   project.name AS "projectName",task.title AS "taskTitle",
@@ -815,12 +840,21 @@ export class CollaborationStore {
     workspaceId: string,
     subjectType: AccessSubjectType,
     subjectId: string,
+    includeIdentityTerms = true,
   ): Promise<string[]> {
     const result = await this.pool.query<{ value: string }>(
-      `SELECT value FROM opsweave.protected_terms WHERE workspace_id=$1
+      `SELECT value FROM opsweave.protected_terms WHERE $4::boolean AND workspace_id=$1
        AND (($2='project' AND context_project_id=$3) OR ($2='task' AND context_task_id=$3)
-         OR ($2='task' AND context_project_id=(SELECT project_id FROM opsweave.tasks WHERE id=$3)))`,
-      [workspaceId, subjectType, subjectId],
+         OR ($2='task' AND context_project_id=(SELECT project_id FROM opsweave.tasks WHERE id=$3)))
+       UNION
+       SELECT keyword.value FROM opsweave.access_grants access
+       CROSS JOIN LATERAL unnest(access.privacy_keywords) keyword(value)
+       WHERE access.workspace_id=$1 AND access.status IN ('active','invite_pending')
+         AND (access.expires_at IS NULL OR access.expires_at>now())
+         AND (($2='project' AND access.subject_project_id=$3)
+           OR ($2='task' AND (access.subject_task_id=$3 OR access.subject_project_id=(
+             SELECT project_id FROM opsweave.tasks WHERE id=$3))))`,
+      [workspaceId, subjectType, subjectId, includeIdentityTerms],
     );
     return result.rows.map((row) => row.value);
   }
@@ -910,7 +944,15 @@ export class CollaborationStore {
         WHEN subject.anonymised THEN coalesce(alias.alias,
           CASE WHEN membership.role IN ('owner','admin') THEN 'Workspace owner' ELSE 'Participant' END)
         ELSE 'Participant '||upper(substr(md5(subject.subject_id::text||"user".id::text),1,6)) END AS "displayName",
-        CASE WHEN subject.anonymised THEN alias.alias END AS alias
+        CASE WHEN subject.anonymised THEN alias.alias END AS alias,
+        (SELECT access.profile_description FROM opsweave.access_grants access
+          WHERE access.workspace_id=$1 AND access.delegate_user_id=participant.user_id
+            AND access.status IN ('active','invite_pending')
+            AND (access.expires_at IS NULL OR access.expires_at>now())
+            AND (access.subject_task_id=subject.task_id OR access.subject_project_id=subject.project_id)
+            AND access.profile_description IS NOT NULL
+          ORDER BY (access.subject_task_id=subject.task_id) DESC,access.created_at DESC LIMIT 1)
+          AS "profileDescription"
       FROM participants participant
       JOIN opsweave.users "user" ON "user".id=participant.user_id
       JOIN opsweave.workspace_memberships membership ON membership.user_id="user".id
@@ -933,6 +975,7 @@ export class CollaborationStore {
     kind: "log_note" | "message";
     mentionedUserIds: readonly string[];
     notificationUserIds: readonly string[];
+    policyFlagged?: boolean;
     quarantineReason: string | null;
     subjectId: string;
     subjectType: AccessSubjectType;
@@ -995,15 +1038,17 @@ export class CollaborationStore {
             ],
           );
         }
-        await client.query(
-          `INSERT INTO opsweave.compliance_jobs (workspace_id,audit_event_id)
-           SELECT $1,$2 FROM opsweave.workspace_settings settings
-           JOIN opsweave.workspace_memberships membership ON membership.workspace_id=settings.workspace_id
-           WHERE settings.workspace_id=$1 AND settings.compliance_monitor_enabled
-             AND membership.user_id=$3 AND membership.role='delegate' AND membership.status='active'
-           ON CONFLICT (audit_event_id) DO NOTHING`,
-          [input.workspaceId, eventId, input.actorUserId],
-        );
+        if (input.policyFlagged !== true) {
+          await client.query(
+            `INSERT INTO opsweave.compliance_jobs (workspace_id,audit_event_id)
+             SELECT $1,$2 FROM opsweave.workspace_settings settings
+             JOIN opsweave.workspace_memberships membership ON membership.workspace_id=settings.workspace_id
+             WHERE settings.workspace_id=$1 AND settings.compliance_monitor_enabled
+               AND membership.user_id=$3 AND membership.role='delegate' AND membership.status='active'
+             ON CONFLICT (audit_event_id) DO NOTHING`,
+            [input.workspaceId, eventId, input.actorUserId],
+          );
+        }
       } else {
         await client.query(
           `INSERT INTO opsweave.compliance_flags
@@ -1032,6 +1077,37 @@ export class CollaborationStore {
              AND recipient.role IN ('owner','admin') AND recipient.status='active'
            ON CONFLICT (idempotency_key) DO NOTHING`,
           [input.workspaceId, eventId, `compliance:${eventId}`],
+        );
+      }
+      if (input.contentStatus === "approved" && input.policyFlagged === true) {
+        await client.query(
+          `INSERT INTO opsweave.compliance_flags
+            (workspace_id,source_audit_event_id,subject_project_id,subject_task_id,
+             delegate_user_id,delegate_alias_snapshot,risk_level,categories,reason,evidence_reference)
+           VALUES ($1,$2,CASE WHEN $3='project' THEN $4::uuid END,
+             CASE WHEN $3='task' THEN $4::uuid END,$5,$6,'high',ARRAY['possible_solicitation'],
+             $7,$2::text)`,
+          [
+            input.workspaceId,
+            eventId,
+            input.subjectType,
+            input.subjectId,
+            input.actorUserId,
+            input.actorAlias,
+            input.quarantineReason ?? "Contact or private identity details were redacted.",
+          ],
+        );
+        await client.query(
+          `INSERT INTO opsweave.notifications
+            (workspace_id,recipient_user_id,source_audit_event_id,type,title,body,
+             route_type,route_id,idempotency_key)
+           SELECT $1,recipient.user_id,$2,'compliance_flag','Possible solicitation was redacted',
+             'Contact or private identity details were removed from shared chatter.','notifications',NULL,
+             $3||':'||recipient.user_id::text
+           FROM opsweave.workspace_memberships recipient WHERE recipient.workspace_id=$1
+             AND recipient.role IN ('owner','admin') AND recipient.status='active'
+           ON CONFLICT (idempotency_key) DO NOTHING`,
+          [input.workspaceId, eventId, `compliance-redaction:${eventId}`],
         );
       }
       return eventId;
@@ -1080,7 +1156,11 @@ export class CollaborationStore {
          AND ($4 IN ('owner','admin') OR payload.content_status IS NULL OR payload.content_status='approved'
            OR event.actor_user_id=$5::uuid)
          AND ($6::text IS NULL OR event.action ILIKE '%'||$6||'%' OR payload.search_text ILIKE '%'||$6||'%')
-         AND ($7::text IS NULL OR event.category=$7::text)
+         AND ($7::text IS NULL OR event.category=$7::text OR ($7::text='status' AND (
+           event.action LIKE 'task.moved%' OR event.action='task.schedule.moved'
+           OR event.action='task.selected_by_automation'
+           OR coalesce(event.metadata->'changes','{}'::jsonb) ?| ARRAY['workflowLane','stageId','status']
+         )))
          AND ($8::date IS NULL OR event.created_at >= $8::date)
          AND ($9::date IS NULL OR event.created_at < $9::date + interval '1 day')
          AND ($10::uuid IS NULL OR event.actor_user_id=$10::uuid)
@@ -1794,12 +1874,174 @@ export class CollaborationStore {
     return result.rows;
   }
 
+  public async listDelegationBadges(workspaceId: string): Promise<DelegationBadgeRecord[]> {
+    const result = await this.pool.query<{
+      alias: string | null;
+      displayName: string;
+      profileDescription: string | null;
+      status: "active" | "invite_pending";
+      subjectId: string;
+      subjectType: AccessSubjectType;
+    }>(
+      `SELECT access.subject_type AS "subjectType",
+        coalesce(access.subject_project_id,access.subject_task_id) AS "subjectId",
+        coalesce("user".full_name,access.delegate_email) AS "displayName",alias.alias,
+        access.profile_description AS "profileDescription",access.status,
+        access.created_at AS "grantCreatedAt",access.id AS "grantId"
+       FROM opsweave.access_grants access
+       LEFT JOIN opsweave.users "user" ON "user".id=access.delegate_user_id
+       LEFT JOIN opsweave.tasks task ON task.id=access.subject_task_id
+       LEFT JOIN opsweave.delegation_aliases alias ON alias.user_id=access.delegate_user_id
+         AND alias.retired_at IS NULL AND ((alias.context_type='project'
+           AND alias.context_project_id=coalesce(access.subject_project_id,task.project_id))
+           OR (alias.context_type='task' AND alias.context_task_id=access.subject_task_id))
+       WHERE access.workspace_id=$1 AND access.status IN ('active','invite_pending')
+         AND (access.expires_at IS NULL OR access.expires_at>now())
+       UNION ALL
+       SELECT 'task'::varchar AS "subjectType",shared_task.id AS "subjectId",
+        coalesce("user".full_name,access.delegate_email) AS "displayName",alias.alias,
+        access.profile_description AS "profileDescription",access.status,
+        access.created_at AS "grantCreatedAt",access.id AS "grantId"
+       FROM opsweave.access_grants access
+       JOIN opsweave.tasks shared_task ON shared_task.project_id=access.subject_project_id
+         AND shared_task.workspace_id=access.workspace_id AND shared_task.deleted_at IS NULL
+       LEFT JOIN opsweave.users "user" ON "user".id=access.delegate_user_id
+       LEFT JOIN opsweave.task_delegate_audience audience ON audience.task_id=shared_task.id
+         AND audience.user_id=access.delegate_user_id
+       LEFT JOIN opsweave.delegation_aliases alias ON alias.user_id=access.delegate_user_id
+         AND alias.context_type='project' AND alias.context_project_id=access.subject_project_id
+         AND alias.retired_at IS NULL
+       WHERE access.workspace_id=$1 AND access.subject_type='project'
+         AND access.status IN ('active','invite_pending')
+         AND (access.expires_at IS NULL OR access.expires_at>now())
+         AND (shared_task.delegate_visibility='project_delegates'
+           OR (shared_task.delegate_visibility='selected_delegates' AND audience.user_id IS NOT NULL)
+           OR shared_task.created_by_user_id=access.delegate_user_id)
+       ORDER BY "subjectType","subjectId","grantCreatedAt","grantId"`,
+      [workspaceId],
+    );
+    const grouped = new Map<string, DelegationBadgeRecord>();
+    for (const row of result.rows) {
+      const key = `${row.subjectType}:${row.subjectId}`;
+      const current = grouped.get(key);
+      const delegate = {
+        alias: row.alias,
+        displayName: row.displayName,
+        profileDescription: row.profileDescription,
+        status: row.status,
+      };
+      if (
+        current?.delegates.some(
+          (candidate) =>
+            candidate.displayName === delegate.displayName && candidate.alias === delegate.alias,
+        )
+      )
+        continue;
+      grouped.set(
+        key,
+        current === undefined
+          ? { delegates: [delegate], subjectId: row.subjectId, subjectType: row.subjectType }
+          : { ...current, delegates: [...current.delegates, delegate] },
+      );
+    }
+    return [...grouped.values()];
+  }
+
+  public async getEmailDeliveryConfiguration(
+    workspaceId: string,
+  ): Promise<EmailDeliveryConfigurationRecord> {
+    const result = await this.pool.query<{
+      endpoint: string;
+      tokenConfigured: boolean;
+      updatedAt: Date;
+    }>(
+      `SELECT endpoint,encrypted_token IS NOT NULL AS "tokenConfigured",updated_at AS "updatedAt"
+       FROM opsweave.email_delivery_settings WHERE workspace_id=$1`,
+      [workspaceId],
+    );
+    const configuration = result.rows[0];
+    return configuration === undefined
+      ? { configured: false, endpoint: null, tokenConfigured: false, updatedAt: null }
+      : { configured: true, ...configuration };
+  }
+
+  public async getEmailDeliveryRuntimeConfiguration(workspaceId: string): Promise<{
+    encryptedToken: string | null;
+    endpoint: string;
+  } | null> {
+    const result = await this.pool.query<{ encryptedToken: string | null; endpoint: string }>(
+      `SELECT endpoint,encrypted_token AS "encryptedToken"
+       FROM opsweave.email_delivery_settings WHERE workspace_id=$1`,
+      [workspaceId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  public async saveEmailDeliveryConfiguration(input: {
+    actorUserId: string;
+    encryptedToken?: string;
+    endpoint: string;
+    workspaceId: string;
+  }): Promise<void> {
+    await transaction(this.pool, async (client) => {
+      await client.query(
+        `INSERT INTO opsweave.email_delivery_settings
+          (workspace_id,endpoint,encrypted_token,configured_by_user_id)
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT (workspace_id) DO UPDATE SET endpoint=EXCLUDED.endpoint,
+           encrypted_token=CASE WHEN $5::boolean THEN EXCLUDED.encrypted_token
+             ELSE opsweave.email_delivery_settings.encrypted_token END,
+           configured_by_user_id=EXCLUDED.configured_by_user_id,updated_at=now()`,
+        [
+          input.workspaceId,
+          input.endpoint,
+          input.encryptedToken ?? null,
+          input.actorUserId,
+          input.encryptedToken !== undefined,
+        ],
+      );
+      await insertAudit(client, {
+        action: "settings.email_delivery.updated",
+        actorUserId: input.actorUserId,
+        category: "access",
+        metadata: {
+          endpointHost: new URL(input.endpoint).host,
+          tokenChanged: input.encryptedToken !== undefined,
+        },
+        subjectId: input.workspaceId,
+        subjectType: "workspace",
+        workspaceId: input.workspaceId,
+      });
+    });
+  }
+
+  public async deleteEmailDeliveryConfiguration(input: {
+    actorUserId: string;
+    workspaceId: string;
+  }): Promise<void> {
+    await transaction(this.pool, async (client) => {
+      await client.query("DELETE FROM opsweave.email_delivery_settings WHERE workspace_id=$1", [
+        input.workspaceId,
+      ]);
+      await insertAudit(client, {
+        action: "settings.email_delivery.removed",
+        actorUserId: input.actorUserId,
+        category: "access",
+        subjectId: input.workspaceId,
+        subjectType: "workspace",
+        workspaceId: input.workspaceId,
+      });
+    });
+  }
+
   public async createAccessGrant(input: {
     accessRole: AccessRole;
     actorUserId: string;
     anonymise?: boolean;
     delegateEmail: string;
     delegationNote: string | null;
+    privacyKeywords?: readonly string[];
+    profileDescription?: string | null;
     encryptedInvitationPayload: string | null;
     expiresAt: Date | null;
     invitationExpiresAt: Date;
@@ -1896,10 +2138,10 @@ export class CollaborationStore {
         `INSERT INTO opsweave.access_grants
           (workspace_id,subject_type,subject_project_id,subject_task_id,delegate_user_id,
            delegate_email,normalized_delegate_email,scope,access_role,status,expires_at,
-           granted_by_user_id,delegation_note)
+           granted_by_user_id,delegation_note,profile_description,privacy_keywords)
          VALUES ($1,$2::varchar(16),CASE WHEN $2::text='project' THEN $3::uuid END,
           CASE WHEN $2::text='task' THEN $3::uuid END,$4,$5,$5,$2::varchar(16),$6,
-          'invite_pending',$7,$8,$9)
+          'invite_pending',$7,$8,$9,$10,$11)
          RETURNING id`,
         [
           input.workspaceId,
@@ -1911,6 +2153,8 @@ export class CollaborationStore {
           input.expiresAt,
           input.actorUserId,
           input.delegationNote,
+          input.profileDescription ?? null,
+          input.privacyKeywords ?? [],
         ],
       );
       const grantId = grantResult.rows[0]?.id;
@@ -1966,6 +2210,8 @@ export class CollaborationStore {
     actorUserId: string;
     delegateEmail: string;
     delegationNote?: string | null;
+    privacyKeywords?: readonly string[];
+    profileDescription?: string | null;
     encryptedInvitationPayload: string | null;
     expiresAt?: Date | null;
     grantId: string;
@@ -1979,13 +2225,16 @@ export class CollaborationStore {
         accessRole: AccessRole;
         delegateUserId: string | null;
         delegationNote: string | null;
+        privacyKeywords: string[];
+        profileDescription: string | null;
         expiresAt: Date | null;
         normalizedDelegateEmail: string;
         subjectId: string;
         subjectType: AccessSubjectType;
       }>(
         `SELECT access_role AS "accessRole",delegate_user_id AS "delegateUserId",
-          delegation_note AS "delegationNote",expires_at AS "expiresAt",
+          delegation_note AS "delegationNote",profile_description AS "profileDescription",
+          privacy_keywords AS "privacyKeywords",expires_at AS "expiresAt",
           normalized_delegate_email AS "normalizedDelegateEmail",subject_type AS "subjectType",
           coalesce(subject_project_id,subject_task_id) AS "subjectId"
          FROM opsweave.access_grants
@@ -2046,10 +2295,10 @@ export class CollaborationStore {
         `INSERT INTO opsweave.access_grants
           (workspace_id,subject_type,subject_project_id,subject_task_id,delegate_user_id,
            delegate_email,normalized_delegate_email,scope,access_role,status,expires_at,
-           granted_by_user_id,delegation_note)
+           granted_by_user_id,delegation_note,profile_description,privacy_keywords)
          VALUES ($1,$2::varchar(16),CASE WHEN $2::text='project' THEN $3::uuid END,
           CASE WHEN $2::text='task' THEN $3::uuid END,$4,$5,$5,$2::varchar(16),$6,
-          'invite_pending',$7,$8,$9) RETURNING id`,
+          'invite_pending',$7,$8,$9,$10,$11) RETURNING id`,
         [
           input.workspaceId,
           previous.subjectType,
@@ -2060,6 +2309,10 @@ export class CollaborationStore {
           input.expiresAt === undefined ? previous.expiresAt : input.expiresAt,
           input.actorUserId,
           input.delegationNote === undefined ? previous.delegationNote : input.delegationNote,
+          input.profileDescription === undefined
+            ? previous.profileDescription
+            : input.profileDescription,
+          input.privacyKeywords ?? previous.privacyKeywords,
         ],
       );
       const replacementGrantId = replacement.rows[0]?.id;
@@ -2453,6 +2706,8 @@ export class CollaborationStore {
     accessRole?: AccessRole;
     actorUserId: string;
     delegationNote?: string | null;
+    privacyKeywords?: readonly string[];
+    profileDescription?: string | null;
     expiresAt?: Date | null;
     grantId: string;
     version: number;
@@ -2477,6 +2732,8 @@ export class CollaborationStore {
           access_role=coalesce($4,access_role),
           expires_at=CASE WHEN $5::boolean THEN $6::timestamptz ELSE expires_at END,
           delegation_note=CASE WHEN $7::boolean THEN $8::text ELSE delegation_note END,
+          profile_description=CASE WHEN $9::boolean THEN $10::text ELSE profile_description END,
+          privacy_keywords=CASE WHEN $11::boolean THEN $12::text[] ELSE privacy_keywords END,
           version=version+1,updated_at=now()
          WHERE id=$1 AND workspace_id=$2 AND version=$3 AND status IN ('invite_pending','active')`,
         [
@@ -2488,6 +2745,10 @@ export class CollaborationStore {
           input.expiresAt ?? null,
           input.delegationNote !== undefined,
           input.delegationNote ?? null,
+          input.profileDescription !== undefined,
+          input.profileDescription ?? null,
+          input.privacyKeywords !== undefined,
+          input.privacyKeywords ?? [],
         ],
       );
       if (updated.rowCount !== 1) throw new StoreConflictError("The Access Grant changed.");
@@ -2516,6 +2777,8 @@ export class CollaborationStore {
         metadata: {
           accessRole: input.accessRole,
           delegationNoteChanged: input.delegationNote !== undefined,
+          privacyKeywordsChanged: input.privacyKeywords !== undefined,
+          profileDescriptionChanged: input.profileDescription !== undefined,
           expiresAt: input.expiresAt,
           grantId: input.grantId,
         },
@@ -3243,7 +3506,7 @@ export class CollaborationStore {
         UPDATE opsweave.notification_outbox outbox SET state='processing',
           attempt_count=attempt_count+1,updated_at=now()
         FROM claimed WHERE outbox.id=claimed.id
-        RETURNING outbox.id,outbox.recipient_email AS "recipientEmail",
+        RETURNING outbox.id,outbox.workspace_id AS "workspaceId",outbox.recipient_email AS "recipientEmail",
           outbox.template_key AS "templateKey",outbox.encrypted_payload AS "encryptedPayload"`,
       );
       return result.rows[0] ?? null;
@@ -3349,6 +3612,18 @@ export class CollaborationStore {
       }
       return expired.rows.length;
     });
+  }
+
+  /** Removes closed grant control records after their retention window; audit and time snapshots remain. */
+  public async purgeClosedAccessGrants(retentionDays = 30): Promise<number> {
+    const boundedDays = Math.max(1, Math.min(3650, Math.trunc(retentionDays)));
+    const result = await this.pool.query(
+      `DELETE FROM opsweave.access_grants
+       WHERE status IN ('revoked','expired','declined')
+         AND coalesce(revoked_at,updated_at)<now()-make_interval(days=>$1)`,
+      [boundedDays],
+    );
+    return result.rowCount ?? 0;
   }
 
   public async materializeDelegationAlerts(): Promise<number> {

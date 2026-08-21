@@ -1,6 +1,7 @@
 name: opsweave
 
 x-postgres-image: &postgres-image postgres:18.4-alpine3.24@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+x-clamav-image: &clamav-image clamav/clamav:stable@sha256:78810772a92b4a9168115bc6b2e0ffd702640893b9577f8c3d0432762d2655c4
 x-postgres-healthcheck: &postgres-healthcheck
   test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
   interval: 2s
@@ -9,6 +10,14 @@ x-postgres-healthcheck: &postgres-healthcheck
   start_period: 5s
 
 services:
+  clamav:
+    image: *clamav-image
+    ports:
+      - "127.0.0.1:${OPSWEAVE_CLAMAV_PORT:-3310}:3310"
+    restart: unless-stopped
+    volumes:
+      - opsweave-clamav-db:/var/lib/clamav
+
   postgres:
     image: *postgres-image
     environment:
@@ -36,4 +45,5 @@ services:
       - /var/lib/postgresql
 
 volumes:
+  opsweave-clamav-db:
   opsweave-postgres:

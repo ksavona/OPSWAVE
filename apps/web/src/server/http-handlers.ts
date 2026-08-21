@@ -9,7 +9,7 @@ import {
   getNetworkSignal,
   readCookie,
 } from "./request-security";
-import { getStore, logger } from "./runtime";
+import { getCollaborationStore, getStore, logger } from "./runtime";
 import { SettingsService } from "./settings-service";
 import { IntakeService } from "./intake-service";
 import { PlanningService } from "./planning-service";
@@ -21,6 +21,7 @@ import {
   removeAttachmentFile,
   saveAttachmentFile,
 } from "./attachment-storage";
+import { scanAttachmentUpload } from "./malware-scanner";
 
 let authService: AuthService | undefined;
 let settingsService: SettingsService | undefined;
@@ -30,7 +31,7 @@ let planningService: PlanningService | undefined;
 let reportingService: ReportingService | undefined;
 const auth = () => (authService ??= new AuthService(getStore(), createRateLimitGate()));
 const settings = () => (settingsService ??= new SettingsService(getStore()));
-const work = () => (workService ??= new WorkService(getStore()));
+const work = () => (workService ??= new WorkService(getStore(), getCollaborationStore()));
 const intake = () => (intakeService ??= new IntakeService(getStore()));
 const planning = () => (planningService ??= new PlanningService(getStore(), logger));
 const reporting = () => (reportingService ??= new ReportingService(getStore()));
@@ -358,6 +359,7 @@ export const attachmentsHandler = (
         "Attachments must be between 1 byte and 25 MB.",
         413,
       );
+    await scanAttachmentUpload(file, false);
     const originalName = file.name.split(/[\\/]/u).at(-1)?.trim().slice(0, 500) ?? "document";
     let storageKey: string | undefined;
     try {

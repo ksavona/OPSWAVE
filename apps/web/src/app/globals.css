@@ -1354,6 +1354,16 @@ h1 {
 .task-card p {
   margin: 0;
 }
+.card-title-row {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.card-title-row h3,
+.card-title-row h4 {
+  min-width: 0;
+}
 .compact-form,
 .task-form {
   display: grid;
@@ -1492,6 +1502,11 @@ blockquote {
 .mermaid-search-match path {
   stroke: #ffd166 !important;
   stroke-width: 4px !important;
+}
+.mermaid-delegation-badge {
+  color: var(--accent);
+  fill: var(--accent);
+  pointer-events: none;
 }
 .diagram-source {
   margin-top: 1rem;
@@ -1660,6 +1675,12 @@ td {
   min-height: calc(100dvh - 11rem);
   padding: clamp(1rem, 4vw, 3rem);
 }
+.entity-form[hidden] {
+  display: none;
+}
+.delegation-entity-footer {
+  margin: 0;
+}
 .entity-message {
   margin: 0;
   padding: 0.75rem clamp(1rem, 4vw, 3rem) 0;
@@ -1712,6 +1733,124 @@ td {
 .entity-tabs .tab-required {
   border-color: var(--danger);
   color: #ff8b87;
+}
+.delayed-tooltip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.delayed-tooltip-content {
+  position: absolute;
+  z-index: 80;
+  left: 50%;
+  bottom: calc(100% + 0.55rem);
+  width: max-content;
+  max-width: min(22rem, 80vw);
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  color: var(--foreground);
+  background: #111b23;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.42);
+  font-size: 0.76rem;
+  font-weight: 500;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 0.3rem);
+  transition:
+    opacity 120ms ease 0ms,
+    transform 120ms ease 0ms;
+}
+.delayed-tooltip:hover .delayed-tooltip-content,
+.delayed-tooltip:focus-visible .delayed-tooltip-content,
+.delayed-tooltip:focus-within .delayed-tooltip-content {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  transition-delay: 3s;
+}
+.delayed-tooltip-content ul {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.45rem 0 0;
+  padding-left: 1rem;
+}
+.delayed-tooltip-content li span {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--muted);
+}
+.help-tip-icon {
+  display: inline-grid;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin-left: 0.3rem;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+.delegation-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  min-height: 1.4rem;
+  padding: 0.12rem 0.35rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--border));
+  border-radius: 999px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+.delegation-indicator.compact {
+  min-height: 1.2rem;
+  padding: 0.1rem;
+  border: 0;
+  background: transparent;
+}
+.delegation-indicator svg {
+  width: 1rem;
+  height: 1rem;
+  fill: currentColor;
+}
+.collaboration-settings {
+  display: grid;
+  gap: 1.5rem;
+}
+.collaboration-settings > form,
+.email-delivery-settings {
+  display: grid;
+  gap: 0.8rem;
+}
+.collaboration-runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+.collaboration-runtime-grid article {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background: var(--surface);
+}
+.collaboration-runtime-grid h3,
+.collaboration-runtime-grid p {
+  margin: 0;
+}
+.collaboration-runtime-grid p {
+  margin-top: 0.5rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+@media (max-width: 760px) {
+  .collaboration-runtime-grid {
+    grid-template-columns: 1fr;
+  }
 }
 .project-visual-summary {
   display: flex;

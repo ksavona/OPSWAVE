@@ -138,6 +138,16 @@ export interface WorkspaceData {
   blockerCounts: Record<string, number>;
   clientNames?: string[];
   dependencies: { dependsOnTaskId: string; taskId: string }[];
+  delegations?: {
+    delegates: {
+      alias: string | null;
+      displayName: string;
+      profileDescription: string | null;
+      status: "active" | "invite_pending";
+    }[];
+    subjectId: string;
+    subjectType: "project" | "task";
+  }[];
   entityDependencies: {
     blockerId: string;
     blockerType: "project" | "task";

@@ -3,6 +3,7 @@
 import { useMemo, useState, type SyntheticEvent } from "react";
 
 import { workspaceRequest } from "./workspace-api";
+import { DelayedTooltip, HelpTip } from "./delayed-tooltip";
 
 interface Grant {
   accessRole: "contributor" | "project_collaborator" | "reviewer";
@@ -13,6 +14,8 @@ interface Grant {
   delegateFullName: string | null;
   delegateUserId: string | null;
   delegationNote: string | null;
+  privacyKeywords: string[];
+  profileDescription: string | null;
   expiresAt: string | null;
   id: string;
   invitedAt: string;
@@ -63,6 +66,14 @@ interface Presentation {
 const dateValue = (value: string | null): string => (value === null ? "—" : value.slice(0, 10));
 const formText = (value: FormDataEntryValue | null): string =>
   typeof value === "string" ? value : "";
+const privacyKeywordValues = (value: FormDataEntryValue | null): string[] => [
+  ...new Set(
+    formText(value)
+      .split(/[\n,]/u)
+      .map((item) => item.trim())
+      .filter((item) => item.length >= 2),
+  ),
+];
 
 export const DelegationsWorkspace = ({
   initialGrants,
@@ -111,6 +122,8 @@ export const DelegationsWorkspace = ({
         anonymise: data.get("anonymise") === "on",
         delegateEmail: data.get("delegateEmail"),
         delegationNote: formText(data.get("delegationNote")).trim() || null,
+        privacyKeywords: privacyKeywordValues(data.get("privacyKeywords")),
+        profileDescription: formText(data.get("profileDescription")).trim() || null,
         expiresAt:
           formText(data.get("expiresAt")).length === 0
             ? null
@@ -216,6 +229,35 @@ export const DelegationsWorkspace = ({
       await refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "The delegate could not be changed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const changeProfile = async (grant: Grant) => {
+    const profileDescription = window.prompt(
+      "Description shown to authorised participants after they hover over this delegate:",
+      grant.profileDescription ?? "",
+    );
+    if (profileDescription === null) return;
+    const privacyKeywords = window.prompt(
+      "Private contact details to redact (one per line or comma separated):",
+      grant.privacyKeywords.join("\n"),
+    );
+    if (privacyKeywords === null) return;
+    setBusy(true);
+    try {
+      await workspaceRequest(`/api/delegations/${grant.id}`, "PATCH", {
+        privacyKeywords: privacyKeywordValues(privacyKeywords),
+        profileDescription: profileDescription.trim() || null,
+        version: grant.version,
+      });
+      await refresh();
+      setMessage("Delegate profile and private redaction terms updated.");
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "The delegate profile could not be updated.",
+      );
     } finally {
       setBusy(false);
     }
@@ -340,7 +382,13 @@ export const DelegationsWorkspace = ({
             <input autoComplete="email" name="delegateEmail" required type="email" />
           </label>
           <label>
-            Role
+            <span>
+              Role
+              <HelpTip label="Delegation role">
+                Contributors work on shared items, reviewers validate work, and project
+                collaborators can also create project tasks and shared subtasks.
+              </HelpTip>
+            </span>
             <select name="accessRole" defaultValue="contributor">
               <option value="contributor">Contributor</option>
               {scope === "project" ? (
@@ -356,10 +404,36 @@ export const DelegationsWorkspace = ({
           <label className="checkbox-row">
             <input name="anonymise" type="checkbox" />
             Anonymise delegation
+            <HelpTip label="Anonymise delegation">
+              Uses stable aliases and blocks protected source content until its safe presentation is
+              approved.
+            </HelpTip>
           </label>
           <label className="span-two">
             Delegate instruction
             <textarea maxLength={4000} name="delegationNote" rows={3} />
+          </label>
+          <label className="span-two">
+            Public delegate description
+            <textarea
+              maxLength={1000}
+              name="profileDescription"
+              placeholder="For example: Senior developer responsible for UAT, fixes, and feature requests."
+              rows={2}
+            />
+          </label>
+          <label className="span-two">
+            Private redaction keywords
+            <textarea
+              maxLength={20_000}
+              name="privacyKeywords"
+              placeholder="Emails, phone numbers, websites, domains, and social handles — one per line"
+              rows={3}
+            />
+            <span className="muted">
+              Matches are removed from chatter and flagged in Compliance; delegates never see this
+              list.
+            </span>
           </label>
           <button disabled={busy} type="submit">
             {busy ? "Creating…" : "Notify"}
@@ -413,7 +487,18 @@ export const DelegationsWorkspace = ({
             <tbody>
               {grants.map((grant) => (
                 <tr key={grant.id}>
-                  <td>{grant.delegateFullName ?? grant.delegateEmail}</td>
+                  <td>
+                    {grant.profileDescription === null ? (
+                      (grant.delegateFullName ?? grant.delegateEmail)
+                    ) : (
+                      <DelayedTooltip
+                        content={grant.profileDescription}
+                        label={grant.delegateFullName ?? grant.delegateEmail}
+                      >
+                        <span>{grant.delegateFullName ?? grant.delegateEmail}</span>
+                      </DelayedTooltip>
+                    )}
+                  </td>
                   <td>{grant.alias ?? "—"}</td>
                   <td>
                     <span className="scope-badge">{grant.scope}</span> {grant.subjectTitle}
@@ -492,6 +577,13 @@ export const DelegationsWorkspace = ({
                           >
                             Change delegate
                           </button>
+                          <button
+                            className="secondary compact"
+                            disabled={busy}
+                            onClick={() => void changeProfile(grant)}
+                          >
+                            Profile & privacy
+                          </button>
                         </>
                       ) : null}
                       <button
@@ -517,6 +609,10 @@ export const DelegationsWorkspace = ({
             </tbody>
           </table>
         </div>
+        <p className="muted">
+          Revoked, declined, and expired grant records are retained for 30 days, then removed.
+          Historical timesheets and audit events remain.
+        </p>
       </section>
 
       {selectedGrantId !== null && presentation !== null ? (

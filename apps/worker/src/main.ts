@@ -66,6 +66,7 @@ if (databaseUrl === undefined || databaseUrl.length === 0) {
         // Drain durable compliance work before returning to the polling interval.
       }
       await collaboration.materializeExpiredAccessGrants();
+      await collaboration.purgeClosedAccessGrants(30);
       await collaboration.materializeDelegationAlerts();
     } finally {
       collaborationPollRunning = false;

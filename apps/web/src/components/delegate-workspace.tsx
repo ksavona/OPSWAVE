@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type SyntheticEvent } from "react";
 
 import { workspaceRequest } from "./workspace-api";
+import { DelayedTooltip } from "./delayed-tooltip";
 
 interface Stage {
   archivedAt: string | null;
@@ -394,6 +395,7 @@ interface DelegateActivity {
 
 interface DelegateParticipant {
   displayName: string;
+  profileDescription: string | null;
   userId: string;
 }
 
@@ -556,7 +558,16 @@ const DelegateSubjectDetails = ({
                       }}
                       type="checkbox"
                     />
-                    @{participant.displayName}
+                    {participant.profileDescription === null ? (
+                      `@${participant.displayName}`
+                    ) : (
+                      <DelayedTooltip
+                        content={participant.profileDescription}
+                        label={participant.displayName}
+                      >
+                        <span>@{participant.displayName}</span>
+                      </DelayedTooltip>
+                    )}
                   </label>
                 ))}
               </fieldset>

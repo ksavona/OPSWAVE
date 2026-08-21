@@ -46,6 +46,7 @@ export {
   delegateSubtaskCreateSchema,
   delegateSubtaskUpdateSchema,
   collaborationFlagsSchema,
+  emailDeliveryConfigurationSchema,
   attachmentSharingSchema,
   delegateStateUpdateSchema,
   taskDelegateSharingSchema,
@@ -78,6 +79,7 @@ export {
   containsProtectedTerm,
   createDelegationAlias,
   findProtectedContactMatches,
+  redactProtectedContent,
   protectedContactPatterns,
 } from "./anonymisation.ts";
 export { REDACTED_VALUE, redactSensitiveValues } from "./security/redaction.ts";

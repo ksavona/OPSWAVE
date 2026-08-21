@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import type { Project, ProjectMetrics, Task } from "./workspace-types";
+import type { WorkspaceData } from "./workspace-types";
+import { DelegationIndicator, type DelegateTooltipView } from "./delayed-tooltip";
 import { workspaceRequest } from "./workspace-api";
 
 type GanttMode = "projects" | "tasks";
@@ -35,6 +37,7 @@ const formatDateTime = (value: number): string =>
 
 interface GanttItem {
   allocatedHours: number | null;
+  delegates: readonly DelegateTooltipView[];
   end: number;
   id: string;
   itemType: "project" | "task";
@@ -98,6 +101,7 @@ const taskSchedule = (task: Task): Pick<GanttItem, "allocatedHours" | "end" | "s
 };
 
 export const GanttChart = ({
+  delegations = [],
   initialMode = "tasks",
   onChanged,
   onOpenEntity,
@@ -108,6 +112,7 @@ export const GanttChart = ({
   tasks,
   workingDays = [],
 }: {
+  delegations?: NonNullable<WorkspaceData["delegations"]>;
   initialMode?: GanttMode;
   onChanged?: () => Promise<void>;
   onOpenEntity?: (entity: { id: string; type: "project" | "task" }) => void;
@@ -148,6 +153,10 @@ export const GanttChart = ({
         return [
           {
             allocatedHours: metrics?.allocatedHours ?? 0,
+            delegates:
+              delegations.find(
+                (item) => item.subjectType === "project" && item.subjectId === project.id,
+              )?.delegates ?? [],
             end,
             id: project.id,
             itemType: "project" as const,
@@ -165,6 +174,9 @@ export const GanttChart = ({
       return [
         {
           ...schedule,
+          delegates:
+            delegations.find((item) => item.subjectType === "task" && item.subjectId === task.id)
+              ?.delegates ?? [],
           id: task.id,
           itemType: "task" as const,
           label: task.title,
@@ -179,7 +191,7 @@ export const GanttChart = ({
         },
       ];
     });
-  }, [mode, projectId, projectMetrics, projects, tasks]);
+  }, [delegations, mode, projectId, projectMetrics, projects, tasks]);
 
   const timeline = useMemo(() => {
     const anchor = dateValue(selectedDate);
@@ -535,6 +547,7 @@ export const GanttChart = ({
                       title={`${item.label}: ${formatDateTime(item.start)} to ${formatDateTime(item.end)}${item.allocatedHours === null ? "" : ` · ${String(item.allocatedHours)}h allocated`} · Drag to reschedule within ${String(workingDays.filter((day) => day.enabled).length)} working days`}
                     >
                       <span>{item.label}</span>
+                      <DelegationIndicator compact delegates={item.delegates} />
                       <i
                         style={{ width: `${String(Math.max(0, Math.min(100, item.progress)))}%` }}
                       />

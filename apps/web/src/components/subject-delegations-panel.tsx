@@ -3,6 +3,7 @@
 import { useEffect, useState, type SyntheticEvent } from "react";
 
 import { workspaceRequest } from "./workspace-api";
+import { DelayedTooltip, HelpTip } from "./delayed-tooltip";
 
 interface GrantView {
   accessRole: "contributor" | "project_collaborator" | "reviewer";
@@ -11,10 +12,13 @@ interface GrantView {
   delegateEmail: string;
   delegateFullName: string | null;
   delegateUserId: string | null;
+  delegationNote: string | null;
   expiresAt: string | null;
   id: string;
   invitedAt: string;
   scope: "project" | "task";
+  privacyKeywords: string[];
+  profileDescription: string | null;
   status: string;
   subjectId: string;
   subjectTitle: string;
@@ -57,6 +61,14 @@ const date = (value: string | null) =>
     : new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(value));
 const formText = (value: FormDataEntryValue | null): string =>
   typeof value === "string" ? value : "";
+const privacyKeywords = (value: FormDataEntryValue | null): string[] => [
+  ...new Set(
+    formText(value)
+      .split(/[\n,]/u)
+      .map((item) => item.trim())
+      .filter((item) => item.length >= 2),
+  ),
+];
 
 const safeNoteText = (value: unknown): string => {
   if (typeof value === "string") return value;
@@ -183,6 +195,8 @@ export const SubjectDelegationsPanel = ({
         anonymise: data.get("anonymise") === "on",
         delegateEmail: data.get("delegateEmail"),
         delegationNote: formText(data.get("delegationNote")).trim() || null,
+        privacyKeywords: privacyKeywords(data.get("privacyKeywords")),
+        profileDescription: formText(data.get("profileDescription")).trim() || null,
         expiresAt:
           formText(data.get("expiresAt")).length === 0
             ? null
@@ -235,7 +249,10 @@ export const SubjectDelegationsPanel = ({
     }
   };
 
-  const updateGrant = async (grant: GrantView, change: "delegate" | "expiry" | "role") => {
+  const updateGrant = async (
+    grant: GrantView,
+    change: "delegate" | "expiry" | "profile" | "role",
+  ) => {
     let payload: Record<string, unknown> = { version: grant.version };
     if (change === "delegate") {
       const delegateEmail = window.prompt("Replacement delegate email address:");
@@ -254,7 +271,7 @@ export const SubjectDelegationsPanel = ({
         return;
       }
       payload = { ...payload, expiresAt: parsed === null ? null : parsed.toISOString() };
-    } else {
+    } else if (change === "role") {
       const accessRole = window.prompt(
         `Role: contributor${grant.subjectType === "project" ? ", project_collaborator" : ""}, or reviewer`,
         grant.accessRole,
@@ -269,6 +286,22 @@ export const SubjectDelegationsPanel = ({
         return;
       }
       payload = { ...payload, accessRole };
+    } else {
+      const profileDescription = window.prompt(
+        "Short description visible to authorised participants when they hover over this delegate:",
+        grant.profileDescription ?? "",
+      );
+      if (profileDescription === null) return;
+      const keywords = window.prompt(
+        "Private contact details to redact (one per line or separated by commas). These are never shown to delegates:",
+        grant.privacyKeywords.join("\n"),
+      );
+      if (keywords === null) return;
+      payload = {
+        ...payload,
+        privacyKeywords: privacyKeywords(keywords),
+        profileDescription: profileDescription.trim() || null,
+      };
     }
     setBusy(true);
     try {
@@ -391,6 +424,10 @@ export const SubjectDelegationsPanel = ({
             type="checkbox"
           />
           Anonymise delegation
+          <HelpTip label="Anonymise delegation">
+            Replaces participant identities with stable aliases for this project and requires an
+            approved delegate-safe presentation before protected content is released.
+          </HelpTip>
         </label>
         <span className="muted">
           {anonymisation.inherited
@@ -486,7 +523,13 @@ export const SubjectDelegationsPanel = ({
           <input autoComplete="email" name="delegateEmail" required type="email" />
         </label>
         <label>
-          Role
+          <span>
+            Role
+            <HelpTip label="Delegation role">
+              Contributors work on shared items, reviewers validate work, and project collaborators
+              can also create project tasks and shared subtasks.
+            </HelpTip>
+          </span>
           <select defaultValue="contributor" name="accessRole">
             <option value="contributor">Contributor</option>
             {subjectType === "project" ? (
@@ -506,6 +549,27 @@ export const SubjectDelegationsPanel = ({
         <label className="span-two">
           Delegate instruction
           <textarea maxLength={4000} name="delegationNote" rows={2} />
+        </label>
+        <label className="span-two">
+          Public delegate description
+          <textarea
+            maxLength={1000}
+            name="profileDescription"
+            placeholder="For example: Senior developer responsible for UAT, fixes, and feature requests."
+            rows={2}
+          />
+        </label>
+        <label className="span-two">
+          Private redaction keywords
+          <textarea
+            maxLength={20_000}
+            name="privacyKeywords"
+            placeholder="Emails, phone numbers, domains, websites, social handles — one per line"
+            rows={3}
+          />
+          <span className="muted">
+            Never shown to delegates. Matches are removed from chatter and flagged in Compliance.
+          </span>
         </label>
         <button disabled={busy} type="submit">
           Notify
@@ -549,7 +613,14 @@ export const SubjectDelegationsPanel = ({
           />
           <div className="task-sharing-control">
             <label>
-              Project delegate access to this task
+              <span>
+                Project delegate access to this task
+                <HelpTip label="Project delegate access to this task">
+                  Internal allows only direct task delegates. All active project delegates shares
+                  this task with every active project delegate. Selected shares it only with the
+                  people you choose below.
+                </HelpTip>
+              </span>
               <select
                 onChange={(event) => {
                   setTaskVisibility(
@@ -648,7 +719,7 @@ const GrantTable = ({
   grants: GrantView[];
   onResend: (id: string) => Promise<void>;
   onRevoke: (id: string) => Promise<void>;
-  onUpdate: (grant: GrantView, change: "delegate" | "expiry" | "role") => Promise<void>;
+  onUpdate: (grant: GrantView, change: "delegate" | "expiry" | "profile" | "role") => Promise<void>;
 }) => (
   <div className="table-scroll">
     <table className="delegation-table">
@@ -667,7 +738,18 @@ const GrantTable = ({
       <tbody>
         {grants.map((grant) => (
           <tr key={grant.id}>
-            <td>{grant.delegateFullName ?? grant.delegateEmail}</td>
+            <td>
+              {grant.profileDescription === null ? (
+                (grant.delegateFullName ?? grant.delegateEmail)
+              ) : (
+                <DelayedTooltip
+                  content={grant.profileDescription}
+                  label={grant.delegateFullName ?? grant.delegateEmail}
+                >
+                  <span>{grant.delegateFullName ?? grant.delegateEmail}</span>
+                </DelayedTooltip>
+              )}
+            </td>
             <td>{grant.alias ?? "—"}</td>
             <td>{date(grant.invitedAt)}</td>
             <td>{date(grant.activatedAt)}</td>
@@ -684,6 +766,16 @@ const GrantTable = ({
                     type="button"
                   >
                     Resend
+                  </button>
+                ) : null}
+                {grant.status === "active" || grant.status === "invite_pending" ? (
+                  <button
+                    className="secondary compact"
+                    disabled={busy}
+                    onClick={() => void onUpdate(grant, "profile")}
+                    type="button"
+                  >
+                    Profile & privacy
                   </button>
                 ) : null}
                 {grant.status === "active" || grant.status === "invite_pending" ? (

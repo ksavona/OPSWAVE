@@ -3,7 +3,7 @@ import Link from "next/link";
 import { LogoutButton } from "../components/logout-button";
 import { Workspace } from "../components/workspace";
 import { getCurrentSession } from "../server/current-session";
-import { getStore } from "../server/runtime";
+import { getCollaborationStore, getStore } from "../server/runtime";
 import { WorkService } from "../server/work-service";
 
 export default async function HomePage({
@@ -13,7 +13,10 @@ export default async function HomePage({
 }) {
   const session = await getCurrentSession();
   const parameters = await searchParams;
-  const workspace = await new WorkService(getStore()).readWorkspace(session, parameters.sort);
+  const workspace = await new WorkService(getStore(), getCollaborationStore()).readWorkspace(
+    session,
+    parameters.sort,
+  );
   const initial = JSON.parse(JSON.stringify(workspace)) as Parameters<
     typeof Workspace
   >[0]["initial"];

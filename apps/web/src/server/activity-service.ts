@@ -2,8 +2,7 @@ import {
   SafeApplicationError,
   activityCreateSchema,
   activityQuerySchema,
-  containsProtectedTerm,
-  findProtectedContactMatches,
+  redactProtectedContent,
 } from "@opsweave/domain";
 import type { CollaborationStore, PrincipalSessionRecord } from "@opsweave/db";
 
@@ -96,17 +95,14 @@ export class ActivityService {
       input.subjectType,
       input.subjectId,
     );
-    const protectedTerms = anonymised
-      ? await this.store.listProtectedTermValues(
-          session.workspaceId,
-          input.subjectType,
-          input.subjectId,
-        )
-      : [];
-    const contactMatches = findProtectedContactMatches(input.body);
-    const protectedTermFound = anonymised && containsProtectedTerm(input.body, protectedTerms);
-    const delegatePolicyViolation = session.role === "delegate" && contactMatches.length > 0;
-    const quarantine = delegatePolicyViolation || protectedTermFound;
+    const protectedTerms = await this.store.listProtectedTermValues(
+      session.workspaceId,
+      input.subjectType,
+      input.subjectId,
+      anonymised,
+    );
+    const redaction = redactProtectedContent(input.body, protectedTerms);
+    const policyFlagged = redaction.matches.length > 0;
     const notificationUserIds =
       input.kind === "message"
         ? mentionedUserIds.length > 0
@@ -117,13 +113,14 @@ export class ActivityService {
     return this.store.createActivity({
       actorAlias: access?.alias ?? null,
       actorUserId: session.userId,
-      body: input.body,
-      contentStatus: quarantine ? "quarantined" : "approved",
+      body: redaction.redacted,
+      contentStatus: "approved",
       kind: input.kind,
       mentionedUserIds,
       notificationUserIds: unique(notificationUserIds),
-      quarantineReason: quarantine
-        ? "Potential protected identity or contact information requires owner review."
+      policyFlagged,
+      quarantineReason: policyFlagged
+        ? "Contact or private identity details were redacted and flagged as possible solicitation."
         : null,
       subjectId: input.subjectId,
       subjectType: input.subjectType,

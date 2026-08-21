@@ -45,6 +45,19 @@ export const configuredEmailTransport = (): EmailTransport | null => {
     : new WebhookEmailTransport(endpoint, process.env.EMAIL_DELIVERY_WEBHOOK_TOKEN);
 };
 
+const storedEmailTransport = async (
+  store: CollaborationStore,
+  workspaceId: string,
+): Promise<EmailTransport | null> => {
+  const configuration = await store.getEmailDeliveryRuntimeConfiguration(workspaceId);
+  if (configuration === null) return null;
+  let token: string | undefined;
+  if (configuration.encryptedToken !== null) {
+    token = decryptInvitationPayload(configuration.encryptedToken);
+  }
+  return new WebhookEmailTransport(configuration.endpoint, token);
+};
+
 export const processOneEmail = async (
   store: CollaborationStore,
   transport: EmailTransport | null,
@@ -53,14 +66,15 @@ export const processOneEmail = async (
   const outbox = await store.claimEmailOutbox();
   if (outbox === null) return false;
   try {
-    if (transport === null) throw new Error("Email delivery transport is not configured.");
+    const selectedTransport = transport ?? (await storedEmailTransport(store, outbox.workspaceId));
+    if (selectedTransport === null) throw new Error("Email delivery transport is not configured.");
     const payload = JSON.parse(decryptInvitationPayload(outbox.encryptedPayload)) as {
       invitationUrl?: unknown;
     };
     if (typeof payload.invitationUrl !== "string" || payload.invitationUrl.length === 0)
       throw new Error("Invitation delivery payload is invalid.");
     if (!(await store.validateEmailOutboxBeforeSend(outbox.id))) return true;
-    await transport.deliver({
+    await selectedTransport.deliver({
       invitationUrl: payload.invitationUrl,
       recipientEmail: outbox.recipientEmail,
       templateKey: outbox.templateKey,

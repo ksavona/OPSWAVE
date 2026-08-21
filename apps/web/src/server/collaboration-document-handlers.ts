@@ -12,6 +12,7 @@ import { readAttachmentFile, removeAttachmentFile, saveAttachmentFile } from "./
 import { requirePrincipal } from "./collaboration-handlers";
 import { assertSameOrigin } from "./request-security";
 import { getCollaborationStore, logger } from "./runtime";
+import { scanAttachmentUpload } from "./malware-scanner";
 
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const submittedText = (value: FormDataEntryValue | null, fallback = ""): string =>
@@ -29,44 +30,6 @@ const run = async (operation: () => Promise<Response>): Promise<Response> => {
     const safe = safeErrorResponse(error);
     if (safe.status === 500) logger.error({ err: error }, "document request failed safely");
     return json(safe.body, safe.status);
-  }
-};
-
-const scanDelegateUpload = async (file: File): Promise<void> => {
-  const endpoint = process.env.ATTACHMENT_SCANNER_ENDPOINT;
-  if (endpoint === undefined || endpoint.length === 0) {
-    throw new SafeApplicationError(
-      "configuration_error",
-      "Delegate uploads require a configured malware scanner.",
-      503,
-    );
-  }
-  const form = new FormData();
-  form.set("file", file);
-  let response: Response;
-  try {
-    response = await fetch(endpoint, {
-      body: form,
-      ...(process.env.ATTACHMENT_SCANNER_TOKEN === undefined
-        ? {}
-        : { headers: { authorization: `Bearer ${process.env.ATTACHMENT_SCANNER_TOKEN}` } }),
-      method: "POST",
-      signal: AbortSignal.timeout(30_000),
-    });
-  } catch {
-    throw new SafeApplicationError(
-      "configuration_error",
-      "The malware scanner is unavailable. The document was not stored.",
-      503,
-    );
-  }
-  const result = (await response.json().catch(() => null)) as { clean?: unknown } | null;
-  if (!response.ok || result?.clean !== true) {
-    throw new SafeApplicationError(
-      "validation_error",
-      "The document did not pass the malware scan and was not stored.",
-      400,
-    );
   }
 };
 
@@ -115,7 +78,7 @@ export const collaborationDocumentsHandler = (
       );
     }
     const prepared = await service.prepareUpload(session, subjectTypeValue, subjectId);
-    if (session.role === "delegate") await scanDelegateUpload(file);
+    await scanAttachmentUpload(file, session.role === "delegate");
     const rawVisibility = submittedText(
       submitted.get("visibility"),
       session.role === "delegate" ? "shared_all_delegates" : "internal_only",

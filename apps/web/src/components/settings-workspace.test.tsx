@@ -193,6 +193,193 @@ describe("SettingsWorkspace", () => {
     );
   });
 
+  it("explains, edits, and saves collaboration feature gates", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          flags: {
+            complianceMonitorEnabled: true,
+            delegateUploadsEnabled: true,
+            invitationEmailEnabled: true,
+            multiUserEnabled: true,
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    const user = userEvent.setup();
+    render(
+      <SettingsWorkspace
+        initial={initial}
+        initialCollaboration={{
+          complianceMonitorEnabled: false,
+          delegateUploadsEnabled: false,
+          invitationEmailEnabled: false,
+          multiUserEnabled: false,
+        }}
+        initialCollaborationRuntime={{
+          email: {
+            configured: false,
+            endpoint: null,
+            source: "settings",
+            tokenConfigured: false,
+            updatedAt: null,
+          },
+          invitationEncryptionReady: true,
+          malwareScanner: { configured: true, mode: "clamav" },
+          publicBaseUrl: "https://kanban.example.test",
+        }}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Collaboration" }));
+
+    expect(screen.getByText("https://kanban.example.test")).toBeInTheDocument();
+    expect(screen.getByText("Ready · ClamAV")).toBeInTheDocument();
+    expect(screen.getByLabelText("Help: delegate uploads")).toHaveTextContent(
+      "rejected if the scanner cannot produce a clean result",
+    );
+    const gates = screen.getAllByRole("checkbox");
+    expect(gates).toHaveLength(4);
+    for (const gate of gates) await user.click(gate);
+    expect(screen.getByText("Unsaved changes.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save Collaboration settings" }));
+
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings/collaboration",
+      expect.objectContaining({
+        body: JSON.stringify({
+          complianceMonitorEnabled: true,
+          delegateUploadsEnabled: true,
+          invitationEmailEnabled: true,
+          multiUserEnabled: true,
+        }),
+        method: "PUT",
+      }),
+    );
+  });
+
+  it("stores and removes workspace email delivery without exposing its token", async () => {
+    const configuredRuntime = {
+      email: {
+        configured: true,
+        endpoint: "https://mailer.example.test/opsweave",
+        source: "settings" as const,
+        tokenConfigured: true,
+        updatedAt: "2026-08-21T06:00:00.000Z",
+      },
+      invitationEncryptionReady: true,
+      malwareScanner: { configured: true, mode: "webhook" as const },
+      publicBaseUrl: "https://kanban.example.test",
+    };
+    const removedRuntime = {
+      ...configuredRuntime,
+      email: {
+        configured: false,
+        endpoint: null,
+        source: "settings" as const,
+        tokenConfigured: false,
+        updatedAt: null,
+      },
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify(configuredRuntime), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(removedRuntime), { status: 200 }));
+    const confirm = vi
+      .spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    const user = userEvent.setup();
+    render(<SettingsWorkspace initial={initial} />);
+    await user.click(screen.getByRole("button", { name: "Collaboration" }));
+
+    await user.type(
+      screen.getByLabelText("HTTPS delivery endpoint"),
+      "https://mailer.example.test/opsweave",
+    );
+    await user.type(screen.getByLabelText(/Bearer token/u), "synthetic-secret");
+    await user.click(screen.getByRole("button", { name: "Save email delivery" }));
+    expect(await screen.findByText("Status: configured via settings")).toBeInTheDocument();
+    expect(screen.getByLabelText(/Bearer token/u)).toHaveValue("");
+    expect(document.body.innerHTML).not.toContain("synthetic-secret");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/settings/collaboration/email",
+      expect.objectContaining({
+        body: JSON.stringify({
+          endpoint: "https://mailer.example.test/opsweave",
+          token: "synthetic-secret",
+        }),
+        method: "PUT",
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Remove email delivery" }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Remove email delivery" }));
+    expect(await screen.findByText("Status: not configured")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/settings/collaboration/email",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(confirm).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps environment-managed email delivery read-only", async () => {
+    const user = userEvent.setup();
+    render(
+      <SettingsWorkspace
+        initial={initial}
+        initialCollaborationRuntime={{
+          email: {
+            configured: true,
+            endpoint: "https://mailer.example.test/environment",
+            source: "environment",
+            tokenConfigured: false,
+            updatedAt: null,
+          },
+          invitationEncryptionReady: false,
+          malwareScanner: { configured: true, mode: "webhook" },
+          publicBaseUrl: null,
+        }}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Collaboration" }));
+
+    expect(screen.getByText("Ready · webhook")).toBeInTheDocument();
+    expect(screen.getAllByText("Not configured", { selector: "strong" })).toHaveLength(2);
+    expect(screen.getByLabelText("HTTPS delivery endpoint")).toBeDisabled();
+    expect(screen.getByLabelText(/Bearer token/u)).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save email delivery" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Remove email delivery" })).not.toBeInTheDocument();
+  });
+
+  it("reports collaboration and email delivery failures safely", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: "Collaboration service unavailable." }), {
+          status: 503,
+        }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 500 }));
+    const user = userEvent.setup();
+    render(<SettingsWorkspace initial={initial} />);
+    await user.click(screen.getByRole("button", { name: "Collaboration" }));
+    await user.click(screen.getByRole("button", { name: "Save Collaboration settings" }));
+    expect(await screen.findByText("Collaboration service unavailable.")).toBeInTheDocument();
+
+    await user.type(
+      screen.getByLabelText("HTTPS delivery endpoint"),
+      "https://mailer.example.test/opsweave",
+    );
+    await user.click(screen.getByRole("button", { name: "Save email delivery" }));
+    expect(await screen.findByText("The request failed.")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("shows when a manual run is waiting for an LLM response", async () => {
     let resolveRequest: ((response: Response) => void) | undefined;
     vi.spyOn(globalThis, "fetch").mockImplementation(

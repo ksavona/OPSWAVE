@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type SyntheticEvent } from "react";
 
 import { ProjectStageSettings } from "./project-stage-settings";
 import { automationRunMessage } from "./workspace-api";
+import { HelpTip } from "./delayed-tooltip";
 import type { Stage } from "./workspace-types";
 
 type Section =
@@ -113,11 +114,24 @@ export const SettingsWorkspace = ({
     invitationEmailEnabled: false,
     multiUserEnabled: false,
   },
+  initialCollaborationRuntime = {
+    email: {
+      configured: false,
+      endpoint: null,
+      source: "settings",
+      tokenConfigured: false,
+      updatedAt: null,
+    },
+    invitationEncryptionReady: false,
+    malwareScanner: { configured: false, mode: "none" },
+    publicBaseUrl: null,
+  },
   initial,
   stages = [],
 }: {
   initial: SettingsData;
   initialCollaboration?: CollaborationFlags;
+  initialCollaborationRuntime?: CollaborationRuntime;
   stages?: Stage[];
 }) => {
   const [active, setActive] = useState<Section>("general");
@@ -206,6 +220,7 @@ export const SettingsWorkspace = ({
         {active === "collaboration" ? (
           <CollaborationSection
             initial={initialCollaboration}
+            initialRuntime={initialCollaborationRuntime}
             setMessage={setMessage}
             setState={setState}
           />
@@ -226,86 +241,241 @@ interface CollaborationFlags {
   multiUserEnabled: boolean;
 }
 
+interface CollaborationRuntime {
+  email: {
+    configured: boolean;
+    endpoint: string | null;
+    source: "environment" | "settings";
+    tokenConfigured: boolean;
+    updatedAt: string | null;
+  };
+  invitationEncryptionReady: boolean;
+  malwareScanner: { configured: boolean; mode: "clamav" | "none" | "webhook" };
+  publicBaseUrl: string | null;
+}
+
 const CollaborationSection = ({
   initial,
+  initialRuntime,
   setMessage,
   setState,
 }: {
   initial: CollaborationFlags;
+  initialRuntime: CollaborationRuntime;
   setMessage: (message: string) => void;
   setState: (state: SaveState) => void;
 }) => {
   const [flags, setFlags] = useState(initial);
+  const [runtime, setRuntime] = useState(initialRuntime);
+  const [emailEndpoint, setEmailEndpoint] = useState(initialRuntime.email.endpoint ?? "");
+  const [emailToken, setEmailToken] = useState("");
   const toggle = (field: keyof CollaborationFlags, checked: boolean) => {
     setFlags((current) => ({ ...current, [field]: checked }));
     setState("unsaved");
   };
   return (
-    <form
-      onSubmit={(event) => {
-        event.preventDefault();
-        setState("saving");
-        void request("/api/settings/collaboration", "PUT", flags)
-          .then((response) => {
-            if (response.flags !== null && typeof response.flags === "object")
-              setFlags(response.flags as unknown as CollaborationFlags);
-            setState("saved");
+    <section className="collaboration-settings">
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          setState("saving");
+          void request("/api/settings/collaboration", "PUT", flags)
+            .then((response) => {
+              if (response.flags !== null && typeof response.flags === "object")
+                setFlags(response.flags as unknown as CollaborationFlags);
+              setState("saved");
+            })
+            .catch((error: unknown) => {
+              setMessage(
+                error instanceof Error ? error.message : "Unable to save collaboration settings.",
+              );
+              setState("error");
+            });
+        }}
+      >
+        <h2>Collaboration</h2>
+        <p>
+          Feature gates fail closed. Email and uploads require their deployment services before they
+          can operate.
+        </p>
+        <label className="checkbox-row">
+          <input
+            checked={flags.multiUserEnabled}
+            onChange={(event) => {
+              toggle("multiUserEnabled", event.target.checked);
+            }}
+            type="checkbox"
+          />
+          Enable delegated user access
+          <HelpTip label="delegated user access">
+            Allows invited delegates to sign in only to work covered by an active Access Grant.
+            Turning this off closes delegate access without deleting history.
+          </HelpTip>
+        </label>
+        <label className="checkbox-row">
+          <input
+            checked={flags.invitationEmailEnabled}
+            onChange={(event) => {
+              toggle("invitationEmailEnabled", event.target.checked);
+            }}
+            type="checkbox"
+          />
+          Queue invitation emails
+          <HelpTip label="invitation emails">
+            Encrypts each single-use link before it enters the delivery queue. This can be enabled
+            only when link encryption and an email delivery endpoint are ready.
+          </HelpTip>
+        </label>
+        <label className="checkbox-row">
+          <input
+            checked={flags.delegateUploadsEnabled}
+            onChange={(event) => {
+              toggle("delegateUploadsEnabled", event.target.checked);
+            }}
+            type="checkbox"
+          />
+          Allow delegate uploads
+          <HelpTip label="delegate uploads">
+            Permits delegates to upload shared documents. Every upload is scanned before storage and
+            is rejected if the scanner cannot produce a clean result.
+          </HelpTip>
+        </label>
+        <label className="checkbox-row">
+          <input
+            checked={flags.complianceMonitorEnabled}
+            onChange={(event) => {
+              toggle("complianceMonitorEnabled", event.target.checked);
+            }}
+            type="checkbox"
+          />
+          Enable owner-only compliance monitoring
+          <HelpTip label="compliance monitoring">
+            Reviews delegate chatter and document metadata for privacy or solicitation risks. Only
+            owners and admins can see and action the flags.
+          </HelpTip>
+        </label>
+        <button type="submit">Save Collaboration settings</button>
+      </form>
+
+      <div className="collaboration-runtime-grid">
+        <article>
+          <h3>Public invitation URL</h3>
+          <strong>{runtime.publicBaseUrl ?? "Not configured"}</strong>
+          <p>
+            Invitation links use this HTTPS address. Configure <code>APP_BASE_URL</code> in the
+            deployment environment.
+          </p>
+        </article>
+        <article>
+          <h3>Invitation encryption</h3>
+          <strong>{runtime.invitationEncryptionReady ? "Ready" : "Not configured"}</strong>
+          <p>
+            The server-side <code>INVITATION_LINK_ENCRYPTION_KEY</code> protects links queued for
+            email. It is never entered or displayed in the browser.
+          </p>
+        </article>
+        <article>
+          <h3>Malware scanning</h3>
+          <strong>
+            {runtime.malwareScanner.configured
+              ? `Ready · ${runtime.malwareScanner.mode === "clamav" ? "ClamAV" : "webhook"}`
+              : "Not configured"}
+          </strong>
+          <p>
+            OpsWeave uses the deployment scanner before storing uploads. Delegate uploads fail
+            closed whenever scanning is unavailable.
+          </p>
+        </article>
+      </div>
+
+      <form
+        className="email-delivery-settings"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setState("saving");
+          void request("/api/settings/collaboration/email", "PUT", {
+            endpoint: emailEndpoint,
+            ...(emailToken.trim().length === 0 ? {} : { token: emailToken }),
           })
-          .catch((error: unknown) => {
-            setMessage(
-              error instanceof Error ? error.message : "Unable to save collaboration settings.",
-            );
-            setState("error");
-          });
-      }}
-    >
-      <h2>Collaboration</h2>
-      <p>
-        Feature gates fail closed. Email and uploads require their deployment services before they
-        can operate.
-      </p>
-      <label className="checkbox-row">
-        <input
-          checked={flags.multiUserEnabled}
-          onChange={(event) => {
-            toggle("multiUserEnabled", event.target.checked);
-          }}
-          type="checkbox"
-        />
-        Enable delegated user access
-      </label>
-      <label className="checkbox-row">
-        <input
-          checked={flags.invitationEmailEnabled}
-          onChange={(event) => {
-            toggle("invitationEmailEnabled", event.target.checked);
-          }}
-          type="checkbox"
-        />
-        Queue invitation emails (requires encryption key and email transport)
-      </label>
-      <label className="checkbox-row">
-        <input
-          checked={flags.delegateUploadsEnabled}
-          onChange={(event) => {
-            toggle("delegateUploadsEnabled", event.target.checked);
-          }}
-          type="checkbox"
-        />
-        Allow delegate uploads (requires configured malware scanner)
-      </label>
-      <label className="checkbox-row">
-        <input
-          checked={flags.complianceMonitorEnabled}
-          onChange={(event) => {
-            toggle("complianceMonitorEnabled", event.target.checked);
-          }}
-          type="checkbox"
-        />
-        Enable owner-only compliance monitoring
-      </label>
-      <button type="submit">Save Collaboration settings</button>
-    </form>
+            .then((response) => {
+              setRuntime(response as unknown as CollaborationRuntime);
+              setEmailToken("");
+              setState("saved");
+            })
+            .catch((error: unknown) => {
+              setMessage(error instanceof Error ? error.message : "Unable to save email delivery.");
+              setState("error");
+            });
+        }}
+      >
+        <h3>Email delivery</h3>
+        <p>
+          Configure the existing server-side delivery webhook. OpsWeave sends the recipient,
+          template key, and secure invitation URL as JSON. The optional bearer token is encrypted
+          and is never returned to the browser.
+        </p>
+        <label>
+          HTTPS delivery endpoint
+          <input
+            disabled={runtime.email.source === "environment"}
+            onChange={(event) => {
+              setEmailEndpoint(event.target.value);
+            }}
+            placeholder="https://mailer.example.com/opsweave"
+            required
+            type="url"
+            value={emailEndpoint}
+          />
+        </label>
+        <label>
+          Bearer token{" "}
+          {runtime.email.tokenConfigured ? "(leave blank to keep existing)" : "(optional)"}
+          <input
+            autoComplete="new-password"
+            disabled={runtime.email.source === "environment"}
+            onChange={(event) => {
+              setEmailToken(event.target.value);
+            }}
+            type="password"
+            value={emailToken}
+          />
+        </label>
+        <div className="button-row">
+          <button disabled={runtime.email.source === "environment"} type="submit">
+            Save email delivery
+          </button>
+          {runtime.email.source === "settings" && runtime.email.configured ? (
+            <button
+              className="danger"
+              onClick={() => {
+                if (!window.confirm("Remove the stored email delivery configuration?")) return;
+                setState("saving");
+                void request("/api/settings/collaboration/email", "DELETE")
+                  .then((response) => {
+                    setRuntime(response as unknown as CollaborationRuntime);
+                    setEmailEndpoint("");
+                    setEmailToken("");
+                    setState("saved");
+                  })
+                  .catch((error: unknown) => {
+                    setMessage(
+                      error instanceof Error ? error.message : "Unable to remove email delivery.",
+                    );
+                    setState("error");
+                  });
+              }}
+              type="button"
+            >
+              Remove email delivery
+            </button>
+          ) : null}
+        </div>
+        <p className="muted">
+          Status:{" "}
+          {runtime.email.configured ? `configured via ${runtime.email.source}` : "not configured"}
+        </p>
+      </form>
+    </section>
   );
 };
 

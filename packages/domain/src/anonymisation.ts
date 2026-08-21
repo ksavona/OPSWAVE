@@ -54,3 +54,36 @@ export const containsProtectedTerm = (value: string, terms: readonly string[]): 
     return candidate.length >= 2 && normalized.includes(candidate);
   });
 };
+
+const escapePattern = (value: string): string => value.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+
+export interface ProtectedContentRedaction {
+  readonly matches: readonly string[];
+  readonly redacted: string;
+}
+
+/** Removes contact details and owner-defined privacy terms before shared chatter is stored. */
+export const redactProtectedContent = (
+  value: string,
+  terms: readonly string[] = [],
+): ProtectedContentRedaction => {
+  const matches = [
+    ...findProtectedContactMatches(value),
+    ...terms.filter((term) => containsProtectedTerm(value, [term])),
+  ];
+  let redacted = value;
+  for (const pattern of protectedContactPatterns) {
+    redacted = redacted.replace(pattern, "[REDACTED CONTACT]");
+  }
+  for (const term of [...new Set(terms.map((candidate) => candidate.normalize("NFKC").trim()))]
+    .filter((candidate) => candidate.length >= 2)
+    .sort((left, right) => right.length - left.length)) {
+    redacted = redacted.replace(
+      // The owner-controlled literal is escaped before constructing this replacement expression.
+      // eslint-disable-next-line security/detect-non-literal-regexp
+      new RegExp(escapePattern(term), "giu"),
+      "[REDACTED PRIVATE DETAIL]",
+    );
+  }
+  return { matches: [...new Set(matches)].slice(0, 20), redacted };
+};
